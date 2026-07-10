@@ -37,19 +37,120 @@ def test_vectorstore_load_missing():
         assert store.load_index() is False
 
 
+# ==========================================================================
+# RAG Service Tests
+# ==========================================================================
+
+from langchain_core.messages import HumanMessage, AIMessage
+from app.services.rag_service import RAGService, _convert_chat_history
+
+
+def test_convert_chat_history_empty():
+    """Empty history → empty list."""
+    assert _convert_chat_history([]) == []
+
+
+def test_convert_chat_history_mixed_roles():
+    """Dict history is mapped to correct BaseMessage subclasses."""
+    history = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+        {"role": "human", "content": "What is RAG?"},
+        {"role": "ai", "content": "RAG stands for ..."},
+    ]
+    result = _convert_chat_history(history)
+    assert isinstance(result[0], HumanMessage) and result[0].content == "Hello"
+    assert isinstance(result[1], AIMessage) and result[1].content == "Hi there"
+    assert isinstance(result[2], HumanMessage) and result[2].content == "What is RAG?"
+    assert isinstance(result[3], AIMessage)
+
+
+def test_rag_service_empty_store_returns_error_string():
+    """answer_query() returns a descriptive error when the store is uninitialised."""
+    embeddings = FakeEmbeddings(size=1536)
+    store = FAISSVectorStore(embeddings=embeddings)
+    llm = FakeListChatModel(responses=["ignored"])
+
+    service = RAGService(vector_store=store, llm=llm)
+    answer, sources = service.answer_query("test question", [])
+
+    assert "empty" in answer.lower() or "error" in answer.lower() or isinstance(answer, str)
+    assert sources == []
+
+
+def test_rag_service_invokes_lcel_chain():
+    """
+    answer_query() invokes the LCEL chain and returns answer + source docs.
+    The internal chain is mocked to avoid real LLM/FAISS calls.
+    """
+    embeddings = FakeEmbeddings(size=1536)
+    store = FAISSVectorStore(embeddings=embeddings)
+    llm = FakeListChatModel(responses=["Mock LLM answer"])
+
+    service = RAGService(vector_store=store, llm=llm)
+
+    source_doc = Document(
+        page_content="Context text from page 3.",
+        metadata={"source": "report.pdf", "page": 3},
+    )
+
+    mock_chain = MagicMock()
+    mock_chain.invoke.return_value = {
+        "answer": "Mock LLM answer",
+        "context": [source_doc],
+    }
+    service._chain = mock_chain  # inject pre-built chain
+
+    answer, sources = service.answer_query(
+        "What is RAG?",
+        [{"role": "user", "content": "previous question"}],
+    )
+
+    # Verify chain was called with correct keys
+    call_kwargs = mock_chain.invoke.call_args[0][0]
+    assert call_kwargs["input"] == "What is RAG?"
+    assert len(call_kwargs["chat_history"]) == 1
+    assert isinstance(call_kwargs["chat_history"][0], HumanMessage)
+
+    assert answer == "Mock LLM answer"
+    assert len(sources) == 1
+    assert sources[0].metadata["page"] == 3
+    assert sources[0].metadata["source"] == "report.pdf"
+
+
+def test_rag_service_chain_exception_returns_error():
+    """answer_query() returns a safe error string when the chain raises."""
+    embeddings = FakeEmbeddings(size=1536)
+    store = FAISSVectorStore(embeddings=embeddings)
+    llm = FakeListChatModel(responses=[])
+
+    service = RAGService(vector_store=store, llm=llm)
+    mock_chain = MagicMock()
+    mock_chain.invoke.side_effect = RuntimeError("LLM timeout")
+    service._chain = mock_chain
+
+    answer, sources = service.answer_query("Any question", [])
+
+    assert isinstance(answer, str)
+    assert "error" in answer.lower()
+    assert sources == []
+
+
 def test_rag_service_mock_response():
     """
-    Test RAG service response orchestration using fake models.
+    Legacy smoke-test: answer_query() returns (str, list) regardless of
+    whether the store is initialised.
     """
     embeddings = FakeEmbeddings(size=1536)
     store = FAISSVectorStore(embeddings=embeddings)
     llm = FakeListChatModel(responses=["Hello, I am a test response"])
-    
+
     service = RAGService(vector_store=store, llm=llm)
     answer, sources = service.answer_query("test question", [])
-    
+
     assert isinstance(answer, str)
     assert isinstance(sources, list)
+
 
 
 def test_pdf_processor_with_mock_pages():
