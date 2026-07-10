@@ -23,6 +23,7 @@ class SourceDocumentSchema(BaseModel):
     document_name: str
     page: Optional[int] = None
     snippet: str
+    score: Optional[float] = None
 
 
 class ChatResponse(BaseModel):

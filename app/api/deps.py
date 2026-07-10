@@ -14,6 +14,17 @@ from app.core.config import settings
 from app.vectorstore.faiss_store import FAISSVectorStore
 from app.services.pdf_processor import PDFProcessorService
 from app.services.rag_service import RAGService
+from app.services.history_manager import HistoryManager
+
+# Singleton instance for in-memory store
+_history_manager = HistoryManager()
+
+
+def get_history_manager() -> HistoryManager:
+    """
+    FastAPI dependency that returns the HistoryManager singleton instance.
+    """
+    return _history_manager
 
 
 def get_embeddings() -> Embeddings:

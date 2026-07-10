@@ -125,6 +125,19 @@ class RAGService:
         answer: str = result.get("answer", "")
         source_docs: List[Document] = result.get("context", [])
 
+        # Fetch similarity search scores to enrich metadata
+        scores_map = {}
+        try:
+            search_results = self.vector_store.similarity_search(query, k=8)
+            for res_doc, score in search_results:
+                scores_map[res_doc.page_content] = float(score)
+        except Exception as exc:
+            logger.warning("Could not retrieve similarity scores: %s", exc)
+
+        # Enrich source_docs with the calculated scores
+        for doc in source_docs:
+            doc.metadata["score"] = scores_map.get(doc.page_content, 0.0)
+
         logger.info(
             "answer_query: query=%r | sources=%d", query, len(source_docs)
         )

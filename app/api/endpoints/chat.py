@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, status
-from app.api.deps import get_rag_service
+from app.api.deps import get_rag_service, get_history_manager
 from app.core.security import verify_api_key
 from app.schemas.chat import ChatQuery, ChatResponse, SourceDocumentSchema
 from app.services.rag_service import RAGService
+from app.services.history_manager import HistoryManager
 
 router = APIRouter()
 
@@ -16,28 +17,40 @@ router = APIRouter()
 async def chat_query(
     payload: ChatQuery,
     rag_service: RAGService = Depends(get_rag_service),
+    history_manager: HistoryManager = Depends(get_history_manager),
 ) -> ChatResponse:
     """
     Submits a user prompt/question to the RAG chatbot.
     Retrieves matching documents from FAISS and generates an answer using LLM.
+    Persists and updates conversational history across sessions.
     """
-    # Dummy mock structure for answer and sources
+    session_id = payload.session_id or "default-session"
+
+    # 1. Retrieve history
+    history = history_manager.get_history(session_id)
+
+    # 2. Run query using history
     answer, source_docs = rag_service.answer_query(
-        query=payload.message, chat_history=[]
+        query=payload.message, chat_history=history
     )
 
-    # Convert retrieved documents to API response format
+    # 3. Save turn to history
+    history_manager.add_message(session_id, "user", payload.message)
+    history_manager.add_message(session_id, "assistant", answer)
+
+    # 4. Map sources with scores
     sources_response = [
         SourceDocumentSchema(
             document_name=doc.metadata.get("source", "unknown"),
             page=doc.metadata.get("page"),
-            snippet=doc.page_content[:200],
+            snippet=doc.page_content,
+            score=doc.metadata.get("score"),
         )
         for doc in source_docs
     ]
 
     return ChatResponse(
-        session_id=payload.session_id or "default-session",
+        session_id=session_id,
         answer=answer,
         sources=sources_response,
         metadata={"model_name": "mock-rag-pipeline"},
