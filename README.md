@@ -1,6 +1,6 @@
 # FastAPI RAG Chatbot using LangChain and FAISS
 
-A production-ready FastAPI codebase structure for a Retrieval-Augmented Generation (RAG) chatbot using LangChain and a FAISS local vector store. This project features a clean, modular layout separating endpoints, schemas, vector storage wrapper classes, prompt templates, and PDF ingestion services.
+A production-ready RAG chatbot built with FastAPI, LangChain, FAISS, Hugging Face Embeddings, and Google Gemini for intelligent PDF question answering. This project features a clean, modular layout separating endpoints, schemas, vector storage wrapper classes, prompt templates, and PDF ingestion services.
 
 ## Project Structure
 
