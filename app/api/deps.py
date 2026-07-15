@@ -1,4 +1,5 @@
-from typing import Generator
+from typing import Generator, Optional
+import threading
 from fastapi import Depends
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -16,8 +17,10 @@ from app.services.pdf_processor import PDFProcessorService
 from app.services.rag_service import RAGService
 from app.services.history_manager import HistoryManager
 
-# Singleton instance for in-memory store
+# Singleton instances
 _history_manager = HistoryManager()
+_vector_store: Optional[FAISSVectorStore] = None
+_vector_store_lock = threading.Lock()
 
 
 def get_history_manager() -> HistoryManager:
@@ -81,15 +84,35 @@ def get_llm() -> BaseChatModel:
 
 def get_vector_store(embeddings: Embeddings = Depends(get_embeddings)) -> FAISSVectorStore:
     """
-    FastAPI dependency that returns the FAISSVectorStore instance.
+    FastAPI dependency that returns the shared FAISSVectorStore singleton instance.
+    Initializes the store once (thread-safe) on first use.
     """
-    store = FAISSVectorStore(embeddings=embeddings)
-    # Attempts to load existing FAISS index on disk
-    loaded = store.load_index()
-    if not loaded:
-        # Create an empty template index if not found
-        store.create_empty_index()
-    return store
+    global _vector_store
+    
+    # Resolve FastAPI Depends default argument if called as a normal function in unit tests
+    if type(embeddings).__name__ == "Depends":
+        embeddings = get_embeddings()
+
+    if _vector_store is None:
+        with _vector_store_lock:
+            if _vector_store is None:
+                store = FAISSVectorStore(embeddings=embeddings)
+                # Attempts to load existing FAISS index on disk
+                loaded = store.load_index()
+                if not loaded:
+                    # Create an empty template index if not found
+                    store.create_empty_index()
+                _vector_store = store
+    return _vector_store
+
+
+def reset_vector_store() -> None:
+    """
+    Resets the vector store singleton instance. Useful for testing isolation.
+    """
+    global _vector_store
+    with _vector_store_lock:
+        _vector_store = None
 
 
 def get_pdf_processor() -> PDFProcessorService:

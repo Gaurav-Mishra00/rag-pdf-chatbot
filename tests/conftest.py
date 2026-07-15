@@ -45,3 +45,14 @@ def client() -> TestClient:
     """
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def reset_singleton_vector_store():
+    """
+    Reset vector store singleton between tests to ensure clean state and isolation.
+    """
+    from app.api.deps import reset_vector_store
+    reset_vector_store()
+    yield
+    reset_vector_store()

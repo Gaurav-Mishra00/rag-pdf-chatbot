@@ -324,3 +324,41 @@ async def test_document_metadata_and_delete_flow(client):
         assert details_after is None
 
         assert get_vector_store().count == initial_count
+
+
+def test_concurrent_vectorstore_writes():
+    """
+    Test that concurrent writes to the singleton FAISSVectorStore are thread-safe,
+    properly serialized, and do not drop each other's updates.
+    """
+    import concurrent.futures
+    from app.api.deps import get_vector_store
+    from langchain_core.documents import Document
+
+    vector_store = get_vector_store()
+    
+    # Empty index should have 1 vector (the placeholder document)
+    initial_count = vector_store.count
+
+    # Define tasks
+    num_threads = 5
+    documents_per_thread = [
+        Document(page_content=f"Concurrent doc content {i}", metadata={"source": f"doc_{i}.pdf", "page": 1})
+        for i in range(num_threads)
+    ]
+
+    # Execute concurrent additions
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [
+            executor.submit(vector_store.add_documents, [doc])
+            for doc in documents_per_thread
+        ]
+        concurrent.futures.wait(futures)
+
+    # All additions should succeed without raising exceptions
+    for f in futures:
+        assert f.exception() is None
+        assert len(f.result()) == 1
+
+    # Verify final count is exactly initial_count + num_threads
+    assert vector_store.count == initial_count + num_threads
