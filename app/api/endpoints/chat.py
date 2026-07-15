@@ -7,6 +7,8 @@ from app.schemas.chat import ChatQuery, ChatResponse, ChatResponseMetadata, Sour
 from app.services.rag_service import RAGService
 from app.services.history_manager import HistoryManager
 
+from app.core.rate_limiter import check_chat_rate_limit
+
 router = APIRouter()
 
 
@@ -20,6 +22,7 @@ async def chat_query(
     rag_service: RAGService = Depends(get_rag_service),
     history_manager: HistoryManager = Depends(get_history_manager),
     user_id: str = Depends(verify_api_key),
+    _rate_limit=Depends(check_chat_rate_limit),
 ) -> ChatResponse:
     """
     Submits a user prompt/question to the RAG chatbot.

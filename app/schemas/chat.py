@@ -16,7 +16,7 @@ class Message(BaseModel):
 
 
 class ChatQuery(BaseModel):
-    message: str = Field(..., description="The user prompt to process")
+    message: str = Field(..., max_length=4000, description="The user prompt to process")
     session_id: Optional[str] = Field(None, description="Optional conversation session ID")
 
 

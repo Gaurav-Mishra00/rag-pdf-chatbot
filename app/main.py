@@ -42,6 +42,13 @@ async def lifespan(app: FastAPI):
             "Please configure a unique secure API_KEY in production."
         )
 
+    # Automated snapshot backup of data assets on startup
+    try:
+        from app.core.backup import backup_data_assets
+        backup_data_assets()
+    except Exception as e:
+        logger.error("Failed to run automated startup database backup: %s", e)
+
     logger.info("Required local directories and database verified.")
     yield
     # Shutdown event

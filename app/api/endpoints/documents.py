@@ -14,6 +14,8 @@ from app.schemas.document import DocumentUploadResponse, DocumentStatusResponse,
 from app.services.pdf_processor import PDFProcessorService
 from app.vectorstore.faiss_store import FAISSVectorStore
 
+from app.core.rate_limiter import check_upload_rate_limit
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -86,12 +88,14 @@ def _db_get_document_details(document_id: str, user_id: str) -> Tuple[str, List[
         return file_path, chunk_ids
 
 
-def _db_list_documents(user_id: str) -> List[dict]:
+def _db_list_documents(user_id: str, limit: int = 10, offset: int = 0) -> List[dict]:
     with get_db_connection() as conn:
         rows = conn.execute(
             "SELECT document_id, filename, file_size_bytes, chunk_count, status, error_message, created_at "
-            "FROM documents WHERE user_id = ?",
-            (user_id,),
+            "FROM documents WHERE user_id = ? "
+            "ORDER BY created_at DESC "
+            "LIMIT ? OFFSET ?",
+            (user_id, limit, offset),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -116,13 +120,15 @@ def _db_get_document_by_id(document_id: str, user_id: str) -> Optional[dict]:
     status_code=status.HTTP_200_OK,
 )
 async def list_documents(
+    limit: int = 10,
+    offset: int = 0,
     user_id: str = Depends(verify_api_key),
 ) -> List[DocumentStatusResponse]:
     """
     Lists all documents stored in the database metadata table for the caller.
-    Returns a typed list of DocumentStatusResponse objects.
+    Supports pagination with limit and offset query parameters.
     """
-    rows = await anyio.to_thread.run_sync(_db_list_documents, user_id)
+    rows = await anyio.to_thread.run_sync(_db_list_documents, user_id, limit, offset)
     return [DocumentStatusResponse(**row) for row in rows]
 
 
@@ -158,6 +164,7 @@ async def upload_document(
     pdf_processor: PDFProcessorService = Depends(get_pdf_processor),
     vector_store: FAISSVectorStore = Depends(get_vector_store),
     user_id: str = Depends(verify_api_key),
+    _rate_limit=Depends(check_upload_rate_limit),
 ) -> DocumentUploadResponse:
     """
     Uploads a PDF file, saves it locally, parses/chunks its text content,

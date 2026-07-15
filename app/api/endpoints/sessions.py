@@ -24,14 +24,16 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
 )
 async def list_sessions(
+    limit: int = 10,
+    offset: int = 0,
     history_manager: HistoryManager = Depends(get_history_manager),
     user_id: str = Depends(verify_api_key),
 ) -> SessionListResponse:
     """
     Lists all active chat sessions for the calling user with their message
-    count and last activity timestamp, ordered by most recent first.
+    count and last activity timestamp. Supports limit & offset pagination.
     """
-    raw = await history_manager.list_sessions(user_id=user_id)
+    raw = await history_manager.list_sessions(user_id=user_id, limit=limit, offset=offset)
     sessions = [
         SessionSummary(
             session_id=row["session_id"],
@@ -40,7 +42,8 @@ async def list_sessions(
         )
         for row in raw
     ]
-    return SessionListResponse(sessions=sessions, total=len(sessions))
+    total = await history_manager.get_total_sessions_count(user_id=user_id)
+    return SessionListResponse(sessions=sessions, total=total)
 
 
 @router.get(

@@ -3,8 +3,8 @@ from typing import Dict, List
 from app.core.database import get_db_connection
 
 
-def _db_list_sessions(user_id: str) -> List[Dict]:
-    """Sync DB call: returns all distinct sessions for user_id with message count and last activity."""
+def _db_list_sessions(user_id: str, limit: int = 10, offset: int = 0) -> List[Dict]:
+    """Sync DB call: returns all distinct sessions for user_id with message count and last activity (paginated)."""
     with get_db_connection() as conn:
         rows = conn.execute(
             """
@@ -16,10 +16,21 @@ def _db_list_sessions(user_id: str) -> List[Dict]:
             WHERE user_id = ?
             GROUP BY session_id
             ORDER BY last_activity DESC
+            LIMIT ? OFFSET ?
             """,
-            (user_id,)
+            (user_id, limit, offset)
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def _db_get_total_sessions(user_id: str) -> int:
+    """Sync DB call: returns total number of unique sessions owned by user_id."""
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) AS cnt FROM chat_history WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return row["cnt"] if row else 0
 
 
 def _db_get_message_count(session_id: str, user_id: str) -> int:
@@ -85,12 +96,18 @@ class HistoryManager:
         """
         await anyio.to_thread.run_sync(_db_clear_history, session_id, user_id)
 
-    async def list_sessions(self, user_id: str = "default_user") -> List[Dict]:
+    async def list_sessions(self, user_id: str = "default_user", limit: int = 10, offset: int = 0) -> List[Dict]:
         """
         Returns all distinct session IDs for user_id with message count and last activity timestamp.
-        Each dict contains: session_id, message_count, last_activity.
+        Each dict contains: session_id, message_count, last_activity. Supports pagination.
         """
-        return await anyio.to_thread.run_sync(_db_list_sessions, user_id)
+        return await anyio.to_thread.run_sync(_db_list_sessions, user_id, limit, offset)
+
+    async def get_total_sessions_count(self, user_id: str = "default_user") -> int:
+        """
+        Returns the total number of unique sessions for the given user_id.
+        """
+        return await anyio.to_thread.run_sync(_db_get_total_sessions, user_id)
 
     async def get_message_count(self, session_id: str, user_id: str = "default_user") -> int:
         """
