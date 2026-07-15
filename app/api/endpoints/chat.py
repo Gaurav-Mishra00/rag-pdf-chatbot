@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, status
 from app.api.deps import get_rag_service, get_history_manager
+from app.core.config import settings
 from app.core.security import verify_api_key
-from app.schemas.chat import ChatQuery, ChatResponse, SourceDocumentSchema
+from app.schemas.chat import ChatQuery, ChatResponse, ChatResponseMetadata, SourceDocumentSchema
 from app.services.rag_service import RAGService
 from app.services.history_manager import HistoryManager
 
@@ -27,7 +28,7 @@ async def chat_query(
     session_id = payload.session_id or "default-session"
 
     # 1. Retrieve history
-    history = history_manager.get_history(session_id)
+    history = await history_manager.get_history(session_id)
 
     # 2. Run query using history
     answer, source_docs = rag_service.answer_query(
@@ -35,8 +36,8 @@ async def chat_query(
     )
 
     # 3. Save turn to history
-    history_manager.add_message(session_id, "user", payload.message)
-    history_manager.add_message(session_id, "assistant", answer)
+    await history_manager.add_message(session_id, "user", payload.message)
+    await history_manager.add_message(session_id, "assistant", answer)
 
     # 4. Map sources with scores
     sources_response = [
@@ -53,5 +54,9 @@ async def chat_query(
         session_id=session_id,
         answer=answer,
         sources=sources_response,
-        metadata={"model_name": "mock-rag-pipeline"},
+        metadata=ChatResponseMetadata(
+            model_name=settings.LLM_MODEL_NAME,
+            llm_provider=settings.LLM_PROVIDER,
+            embeddings_provider=settings.EMBEDDINGS_PROVIDER,
+        ),
     )

@@ -61,14 +61,15 @@ def test_chat_query_history_persists(client: TestClient):
     Test that sending multiple queries under the same session_id 
     correctly populates and updates the conversational history.
     """
+    import anyio
     from app.api.deps import get_history_manager
     
     headers = {"X-API-Key": "test_secret_key"}
     session_id = "test-session-123"
     
     history_manager = get_history_manager()
-    history_manager.clear_history(session_id)
-    assert len(history_manager.get_history(session_id)) == 0
+    anyio.run(history_manager.clear_history, session_id)
+    assert len(anyio.run(history_manager.get_history, session_id)) == 0
 
     # Send first message
     response = client.post(
@@ -79,7 +80,7 @@ def test_chat_query_history_persists(client: TestClient):
     assert response.status_code == 200
     
     # Verify history has 2 entries (user + assistant)
-    history = history_manager.get_history(session_id)
+    history = anyio.run(history_manager.get_history, session_id)
     assert len(history) == 2
     assert history[0]["role"] == "user"
     assert history[0]["content"] == "First message"
@@ -94,6 +95,6 @@ def test_chat_query_history_persists(client: TestClient):
     assert response2.status_code == 200
     
     # Verify history has 4 entries
-    history_after = history_manager.get_history(session_id)
+    history_after = anyio.run(history_manager.get_history, session_id)
     assert len(history_after) == 4
     assert history_after[2]["content"] == "Second message"

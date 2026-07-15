@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch, call, ANY
 import pytest
 from langchain_core.documents import Document
 from app.services.pdf_processor import PDFProcessorService
@@ -229,7 +229,7 @@ def test_faiss_add_documents_creates_index(fake_store):
          patch.object(fake_store, "save_index") as mock_save:
         fake_store.add_documents(SAMPLE_DOCS)
 
-    mock_from.assert_called_once_with(SAMPLE_DOCS, fake_store.embeddings)
+    mock_from.assert_called_once_with(SAMPLE_DOCS, fake_store.embeddings, ids=ANY)
     mock_save.assert_called_once()
     assert fake_store.vector_store is mock_vs
 
@@ -243,7 +243,7 @@ def test_faiss_add_documents_appends_to_existing(fake_store):
     with patch.object(fake_store, "save_index") as mock_save:
         fake_store.add_documents(SAMPLE_DOCS)
 
-    mock_vs.add_documents.assert_called_once_with(SAMPLE_DOCS)
+    mock_vs.add_documents.assert_called_once_with(SAMPLE_DOCS, ids=ANY)
     mock_save.assert_called_once()
 
 
@@ -317,3 +317,79 @@ def test_faiss_create_empty_index(fake_store):
     assert len(created_docs) == 1
     assert created_docs[0].metadata["source"] == "__init__"
     mock_save.assert_called_once()
+
+
+# ==========================================================================
+# Provider Initialization Tests
+# ==========================================================================
+
+def test_get_embeddings_google(monkeypatch):
+    """get_embeddings() instantiates GoogleGenerativeAIEmbeddings when provider is 'google'."""
+    from app.api.deps import get_embeddings
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "EMBEDDINGS_PROVIDER", "google")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "test-google-key")
+
+    mock_embeddings = MagicMock()
+    with patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", return_value=mock_embeddings) as mock_class:
+        embeddings = get_embeddings()
+        assert embeddings == mock_embeddings
+        mock_class.assert_called_once_with(
+            google_api_key="test-google-key",
+            model=settings.EMBEDDING_MODEL_NAME,
+        )
+
+
+def test_get_embeddings_huggingface(monkeypatch):
+    """get_embeddings() instantiates HuggingFaceEmbeddings when provider is 'huggingface'."""
+    from app.api.deps import get_embeddings
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "EMBEDDINGS_PROVIDER", "huggingface")
+
+    mock_embeddings = MagicMock()
+    with patch("langchain_community.embeddings.HuggingFaceEmbeddings", return_value=mock_embeddings) as mock_class:
+        embeddings = get_embeddings()
+        assert embeddings == mock_embeddings
+        mock_class.assert_called_once_with(
+            model_name=settings.EMBEDDING_MODEL_NAME,
+        )
+
+
+def test_get_llm_google(monkeypatch):
+    """get_llm() instantiates ChatGoogleGenerativeAI when provider is 'google'."""
+    from app.api.deps import get_llm
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "google")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "test-google-key")
+
+    mock_llm = MagicMock()
+    with patch("langchain_google_genai.ChatGoogleGenerativeAI", return_value=mock_llm) as mock_class:
+        llm = get_llm()
+        assert llm == mock_llm
+        mock_class.assert_called_once_with(
+            google_api_key="test-google-key",
+            model=settings.LLM_MODEL_NAME,
+            temperature=settings.TEMPERATURE,
+        )
+
+
+def test_get_llm_anthropic(monkeypatch):
+    """get_llm() instantiates ChatAnthropic when provider is 'anthropic'."""
+    from app.api.deps import get_llm
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "anthropic")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    mock_llm = MagicMock()
+    with patch("langchain_anthropic.ChatAnthropic", return_value=mock_llm) as mock_class:
+        llm = get_llm()
+        assert llm == mock_llm
+        mock_class.assert_called_once_with(
+            api_key="test-anthropic-key",
+            model=settings.LLM_MODEL_NAME,
+            temperature=settings.TEMPERATURE,
+        )

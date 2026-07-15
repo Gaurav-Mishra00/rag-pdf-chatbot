@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # FAISS Path
     FAISS_INDEX_PATH: str = "data/faiss_index"
 
+    # SQLite DB and Upload Directory Settings
+    SQLITE_DB_PATH: str = "data/db.sqlite3"
+    UPLOAD_DIR: str = "data/uploads"
+
     # Embedding Settings
     EMBEDDINGS_PROVIDER: Literal["openai", "huggingface", "google"] = "openai"
     EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"

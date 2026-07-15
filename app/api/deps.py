@@ -36,7 +36,18 @@ def get_embeddings() -> Embeddings:
             openai_api_key=settings.OPENAI_API_KEY,
             model=settings.EMBEDDING_MODEL_NAME,
         )
-    # Fallback to Fake/Mock Embeddings if not configured
+    elif settings.EMBEDDINGS_PROVIDER == "google" and settings.GOOGLE_API_KEY:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(
+            google_api_key=settings.GOOGLE_API_KEY,
+            model=settings.EMBEDDING_MODEL_NAME,
+        )
+    elif settings.EMBEDDINGS_PROVIDER == "huggingface":
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        return HuggingFaceEmbeddings(
+            model_name=settings.EMBEDDING_MODEL_NAME
+        )
+    # Fallback to Fake/Mock Embeddings if not configured or keys are missing
     return FakeEmbeddings(size=1536)
 
 
@@ -47,6 +58,20 @@ def get_llm() -> BaseChatModel:
     if settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
         return ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
+            model=settings.LLM_MODEL_NAME,
+            temperature=settings.TEMPERATURE,
+        )
+    elif settings.LLM_PROVIDER == "google" and settings.GOOGLE_API_KEY:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(
+            google_api_key=settings.GOOGLE_API_KEY,
+            model=settings.LLM_MODEL_NAME,
+            temperature=settings.TEMPERATURE,
+        )
+    elif settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            api_key=settings.ANTHROPIC_API_KEY,
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
         )
