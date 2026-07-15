@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, status
 from app.api.deps import get_rag_service, get_history_manager
 from app.core.config import settings
@@ -25,7 +26,7 @@ async def chat_query(
     Retrieves matching documents from FAISS and generates an answer using LLM.
     Persists and updates conversational history across sessions.
     """
-    session_id = payload.session_id or "default-session"
+    session_id = payload.session_id or f"session-{uuid.uuid4()}"
 
     # 1. Retrieve history
     history = await history_manager.get_history(session_id)

@@ -32,7 +32,7 @@ def test_chat_query_authorized(client: TestClient):
     data = response.json()
     assert "answer" in data
     assert "sources" in data
-    assert data["session_id"] == "default-session"
+    assert data["session_id"].startswith("session-")
 
 
 def test_document_upload_requires_pdf(client: TestClient):
