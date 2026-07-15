@@ -63,13 +63,15 @@ def test_chat_query_history_persists(client: TestClient):
     """
     import anyio
     from app.api.deps import get_history_manager
+    from app.core.security import get_user_id_from_api_key
     
     headers = {"X-API-Key": "test_secret_key"}
     session_id = "test-session-123"
+    user_id = get_user_id_from_api_key("test_secret_key")
     
     history_manager = get_history_manager()
-    anyio.run(history_manager.clear_history, session_id)
-    assert len(anyio.run(history_manager.get_history, session_id)) == 0
+    anyio.run(history_manager.clear_history, session_id, user_id)
+    assert len(anyio.run(history_manager.get_history, session_id, user_id)) == 0
 
     # Send first message
     response = client.post(
@@ -80,7 +82,7 @@ def test_chat_query_history_persists(client: TestClient):
     assert response.status_code == 200
     
     # Verify history has 2 entries (user + assistant)
-    history = anyio.run(history_manager.get_history, session_id)
+    history = anyio.run(history_manager.get_history, session_id, user_id)
     assert len(history) == 2
     assert history[0]["role"] == "user"
     assert history[0]["content"] == "First message"
@@ -95,6 +97,6 @@ def test_chat_query_history_persists(client: TestClient):
     assert response2.status_code == 200
     
     # Verify history has 4 entries
-    history_after = anyio.run(history_manager.get_history, session_id)
+    history_after = anyio.run(history_manager.get_history, session_id, user_id)
     assert len(history_after) == 4
     assert history_after[2]["content"] == "Second message"

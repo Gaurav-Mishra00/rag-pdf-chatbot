@@ -22,9 +22,12 @@ router = APIRouter()
 # Database Query Helpers (Sync functions for run_sync)
 # ------------------------------------------------------------------
 
-def _db_check_document_exists(filename: str) -> bool:
+def _db_check_document_exists(filename: str, user_id: str) -> bool:
     with get_db_connection() as conn:
-        row = conn.execute("SELECT 1 FROM documents WHERE filename = ?", (filename,)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM documents WHERE filename = ? AND user_id = ?",
+            (filename, user_id),
+        ).fetchone()
         return row is not None
 
 
@@ -35,14 +38,15 @@ def _db_insert_document(
     file_size: int,
     chunk_count: int,
     status: str,
+    user_id: str,
 ) -> None:
     with get_db_connection() as conn:
         conn.execute(
             """
-            INSERT INTO documents (document_id, filename, file_path, file_size_bytes, chunk_count, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (document_id, filename, file_path, file_size_bytes, chunk_count, status, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (doc_id, filename, file_path, file_size, chunk_count, status),
+            (doc_id, filename, file_path, file_size, chunk_count, status, user_id),
         )
 
 
@@ -55,17 +59,20 @@ def _db_insert_chunks(doc_id: str, chunk_ids: List[str]) -> None:
             )
 
 
-def _db_delete_document_records(document_id: str) -> None:
+def _db_delete_document_records(document_id: str, user_id: str) -> None:
     with get_db_connection() as conn:
         # Cascade delete is enabled, deleting from documents automatically clears document_chunks
-        conn.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
+        conn.execute(
+            "DELETE FROM documents WHERE document_id = ? AND user_id = ?",
+            (document_id, user_id),
+        )
 
 
-def _db_get_document_details(document_id: str) -> Tuple[str, List[str]] | None:
+def _db_get_document_details(document_id: str, user_id: str) -> Tuple[str, List[str]] | None:
     with get_db_connection() as conn:
         doc_row = conn.execute(
-            "SELECT file_path FROM documents WHERE document_id = ?",
-            (document_id,),
+            "SELECT file_path FROM documents WHERE document_id = ? AND user_id = ?",
+            (document_id, user_id),
         ).fetchone()
         if not doc_row:
             return None
@@ -79,20 +86,22 @@ def _db_get_document_details(document_id: str) -> Tuple[str, List[str]] | None:
         return file_path, chunk_ids
 
 
-def _db_list_documents() -> List[dict]:
+def _db_list_documents(user_id: str) -> List[dict]:
     with get_db_connection() as conn:
         rows = conn.execute(
-            "SELECT document_id, filename, file_size_bytes, chunk_count, status, error_message, created_at FROM documents"
+            "SELECT document_id, filename, file_size_bytes, chunk_count, status, error_message, created_at "
+            "FROM documents WHERE user_id = ?",
+            (user_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
 
-def _db_get_document_by_id(document_id: str) -> Optional[dict]:
+def _db_get_document_by_id(document_id: str, user_id: str) -> Optional[dict]:
     with get_db_connection() as conn:
         row = conn.execute(
             "SELECT document_id, filename, file_size_bytes, chunk_count, status, error_message, created_at "
-            "FROM documents WHERE document_id = ?",
-            (document_id,),
+            "FROM documents WHERE document_id = ? AND user_id = ?",
+            (document_id, user_id),
         ).fetchone()
         return dict(row) if row else None
 
@@ -105,14 +114,15 @@ def _db_get_document_by_id(document_id: str) -> Optional[dict]:
     "",
     response_model=List[DocumentStatusResponse],
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
-async def list_documents() -> List[DocumentStatusResponse]:
+async def list_documents(
+    user_id: str = Depends(verify_api_key),
+) -> List[DocumentStatusResponse]:
     """
-    Lists all documents stored in the database metadata table.
+    Lists all documents stored in the database metadata table for the caller.
     Returns a typed list of DocumentStatusResponse objects.
     """
-    rows = await anyio.to_thread.run_sync(_db_list_documents)
+    rows = await anyio.to_thread.run_sync(_db_list_documents, user_id)
     return [DocumentStatusResponse(**row) for row in rows]
 
 
@@ -120,16 +130,16 @@ async def list_documents() -> List[DocumentStatusResponse]:
     "/{document_id}",
     response_model=DocumentStatusResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def get_document(
     document_id: str,
+    user_id: str = Depends(verify_api_key),
 ) -> DocumentStatusResponse:
     """
-    Returns full metadata for a single document by its document_id.
-    Raises 404 if the document does not exist.
+    Returns full metadata for a single document owned by the caller.
+    Raises 404 if the document does not exist or belongs to another user.
     """
-    row = await anyio.to_thread.run_sync(_db_get_document_by_id, document_id)
+    row = await anyio.to_thread.run_sync(_db_get_document_by_id, document_id, user_id)
     if not row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -142,17 +152,18 @@ async def get_document(
     "/upload",
     response_model=DocumentUploadResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(verify_api_key)],
 )
 async def upload_document(
     file: UploadFile = File(...),
     pdf_processor: PDFProcessorService = Depends(get_pdf_processor),
     vector_store: FAISSVectorStore = Depends(get_vector_store),
+    user_id: str = Depends(verify_api_key),
 ) -> DocumentUploadResponse:
     """
     Uploads a PDF file, saves it locally, parses/chunks its text content,
     generates embeddings with FAISS, and stores mapping metadata in SQLite.
     Supports transactional rollback/cleanup on failure.
+    Isolated per caller.
     """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(
@@ -160,8 +171,8 @@ async def upload_document(
             detail="Only PDF files are supported.",
         )
 
-    # Prevent duplicates by filename
-    exists = await anyio.to_thread.run_sync(_db_check_document_exists, file.filename)
+    # Prevent duplicates by filename per owner
+    exists = await anyio.to_thread.run_sync(_db_check_document_exists, file.filename, user_id)
     if exists:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -230,6 +241,7 @@ async def upload_document(
             len(content),
             len(documents),
             IngestionStatus.COMPLETED.value,
+            user_id,
         )
         await anyio.to_thread.run_sync(_db_insert_chunks, document_id, chunk_ids)
     except Exception as e:
@@ -246,7 +258,7 @@ async def upload_document(
         vector_store.add_documents(documents, ids=chunk_ids)
     except Exception as e:
         # Rollback: Clean database records & delete physical file
-        await anyio.to_thread.run_sync(_db_delete_document_records, document_id)
+        await anyio.to_thread.run_sync(_db_delete_document_records, document_id, user_id)
         if os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(
@@ -265,17 +277,18 @@ async def upload_document(
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def delete_document(
     document_id: str,
     vector_store: FAISSVectorStore = Depends(get_vector_store),
+    user_id: str = Depends(verify_api_key),
 ) -> dict:
     """
     Deletes an uploaded PDF document: removes its chunks from FAISS,
     removes the local file from disk, and purges its metadata from SQLite database.
+    Only allows deleting documents owned by the caller.
     """
-    details = await anyio.to_thread.run_sync(_db_get_document_details, document_id)
+    details = await anyio.to_thread.run_sync(_db_get_document_details, document_id, user_id)
     if not details:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -313,7 +326,7 @@ async def delete_document(
 
     # 3. Clean database metadata entries (cascade deletes document_chunks rows too)
     try:
-        await anyio.to_thread.run_sync(_db_delete_document_records, document_id)
+        await anyio.to_thread.run_sync(_db_delete_document_records, document_id, user_id)
     except Exception as e:
         # FAISS deletion has already committed and cannot be rolled back.
         # Log orphaned IDs so an operator can manually DELETE FROM document_chunks.

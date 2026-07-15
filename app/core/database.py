@@ -48,22 +48,53 @@ def get_db_connection():
 def init_db() -> None:
     """
     Creates necessary database tables if they do not exist.
+    Performs migrations to add user_id column and isolate unique constraints.
     """
     logger.info("Initializing SQLite database at: %s", settings.SQLITE_DB_PATH)
     with get_db_connection() as conn:
-        # 1. Documents Metadata Table
+        # Create documents table with multi-tenant unique constraint if it doesn't exist
         conn.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 document_id TEXT PRIMARY KEY,
-                filename TEXT UNIQUE,
+                filename TEXT,
                 file_path TEXT,
                 file_size_bytes INTEGER,
                 chunk_count INTEGER,
                 status TEXT,
                 error_message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id TEXT DEFAULT 'default_user',
+                UNIQUE(filename, user_id)
             );
         """)
+
+        # Migration: Check if we need to migrate the existing documents table to add user_id
+        cursor = conn.execute("PRAGMA table_info(documents);")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "user_id" not in columns:
+            logger.info("Migrating 'documents' table to add user_id and unique constraint...")
+            conn.execute("ALTER TABLE documents RENAME TO documents_old;")
+            conn.execute("""
+                CREATE TABLE documents (
+                    document_id TEXT PRIMARY KEY,
+                    filename TEXT,
+                    file_path TEXT,
+                    file_size_bytes INTEGER,
+                    chunk_count INTEGER,
+                    status TEXT,
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_id TEXT DEFAULT 'default_user',
+                    UNIQUE(filename, user_id)
+                );
+            """)
+            conn.execute("""
+                INSERT INTO documents (document_id, filename, file_path, file_size_bytes, chunk_count, status, error_message, created_at, user_id)
+                SELECT document_id, filename, file_path, file_size_bytes, chunk_count, status, error_message, created_at, 'default_user'
+                FROM documents_old;
+            """)
+            conn.execute("DROP TABLE documents_old;")
+            logger.info("'documents' table migration completed.")
 
         # 2. FAISS Vector Store Chunk Map Table
         conn.execute("""
@@ -74,15 +105,24 @@ def init_db() -> None:
             );
         """)
 
-        # 3. Conversational Chat History Table
+        # 3. Conversational Chat History Table (with user_id)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT,
                 role TEXT,
                 content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id TEXT DEFAULT 'default_user'
             );
         """)
+
+        # Migration: Check if we need to add user_id to existing chat_history table
+        cursor = conn.execute("PRAGMA table_info(chat_history);")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "user_id" not in columns:
+            logger.info("Migrating 'chat_history' table to add user_id...")
+            conn.execute("ALTER TABLE chat_history ADD COLUMN user_id TEXT DEFAULT 'default_user';")
+            logger.info("'chat_history' table migration completed.")
 
     logger.info("Database tables initialized successfully.")

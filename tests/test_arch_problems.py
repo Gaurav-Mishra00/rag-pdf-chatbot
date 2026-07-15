@@ -278,10 +278,12 @@ async def test_document_metadata_and_delete_flow(client):
     3. Delete document (verify file removed, database cleared, FAISS deleted).
     """
     from app.api.deps import get_vector_store
+    from app.core.security import get_user_id_from_api_key
 
     headers = {"X-API-Key": "test_secret_key"}
     vector_store = get_vector_store()
     initial_count = vector_store.count
+    user_id = get_user_id_from_api_key("test_secret_key")
 
     mock_page = MagicMock()
     mock_page.extract_text.return_value = "This is a document deletion test."
@@ -298,10 +300,10 @@ async def test_document_metadata_and_delete_flow(client):
 
         assert get_vector_store().count == initial_count + 1
 
-        exists = await anyio.to_thread.run_sync(_db_check_document_exists, "deletion_test.pdf")
+        exists = await anyio.to_thread.run_sync(_db_check_document_exists, "deletion_test.pdf", user_id)
         assert exists is True
 
-        details = await anyio.to_thread.run_sync(_db_get_document_details, doc_id)
+        details = await anyio.to_thread.run_sync(_db_get_document_details, doc_id, user_id)
         assert details is not None
         file_path, chunk_ids = details
         assert os.path.exists(file_path) is True
@@ -317,10 +319,10 @@ async def test_document_metadata_and_delete_flow(client):
 
         assert os.path.exists(file_path) is False
 
-        exists_after = await anyio.to_thread.run_sync(_db_check_document_exists, "deletion_test.pdf")
+        exists_after = await anyio.to_thread.run_sync(_db_check_document_exists, "deletion_test.pdf", user_id)
         assert exists_after is False
 
-        details_after = await anyio.to_thread.run_sync(_db_get_document_details, doc_id)
+        details_after = await anyio.to_thread.run_sync(_db_get_document_details, doc_id, user_id)
         assert details_after is None
 
         assert get_vector_store().count == initial_count

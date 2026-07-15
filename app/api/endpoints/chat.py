@@ -14,12 +14,12 @@ router = APIRouter()
     "/query",
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def chat_query(
     payload: ChatQuery,
     rag_service: RAGService = Depends(get_rag_service),
     history_manager: HistoryManager = Depends(get_history_manager),
+    user_id: str = Depends(verify_api_key),
 ) -> ChatResponse:
     """
     Submits a user prompt/question to the RAG chatbot.
@@ -29,7 +29,7 @@ async def chat_query(
     session_id = payload.session_id or f"session-{uuid.uuid4()}"
 
     # 1. Retrieve history
-    history = await history_manager.get_history(session_id)
+    history = await history_manager.get_history(session_id, user_id=user_id)
 
     # 2. Run query using history
     answer, source_docs = rag_service.answer_query(
@@ -37,8 +37,8 @@ async def chat_query(
     )
 
     # 3. Save turn to history
-    await history_manager.add_message(session_id, "user", payload.message)
-    await history_manager.add_message(session_id, "assistant", answer)
+    await history_manager.add_message(session_id, "user", payload.message, user_id=user_id)
+    await history_manager.add_message(session_id, "assistant", answer, user_id=user_id)
 
     # 4. Map sources with scores
     sources_response = [

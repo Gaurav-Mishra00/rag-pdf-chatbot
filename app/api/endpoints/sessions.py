@@ -22,16 +22,16 @@ router = APIRouter()
     "",
     response_model=SessionListResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def list_sessions(
     history_manager: HistoryManager = Depends(get_history_manager),
+    user_id: str = Depends(verify_api_key),
 ) -> SessionListResponse:
     """
-    Lists all active chat sessions with their message count and last
-    activity timestamp, ordered by most recent first.
+    Lists all active chat sessions for the calling user with their message
+    count and last activity timestamp, ordered by most recent first.
     """
-    raw = await history_manager.list_sessions()
+    raw = await history_manager.list_sessions(user_id=user_id)
     sessions = [
         SessionSummary(
             session_id=row["session_id"],
@@ -47,17 +47,17 @@ async def list_sessions(
     "/{session_id}",
     response_model=SessionHistoryResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def get_session_history(
     session_id: str,
     history_manager: HistoryManager = Depends(get_history_manager),
+    user_id: str = Depends(verify_api_key),
 ) -> SessionHistoryResponse:
     """
-    Returns the complete message history for a specific session.
-    Raises 404 if the session has no recorded history.
+    Returns the complete message history for a specific session owned by the caller.
+    Raises 404 if the session has no recorded history under this user.
     """
-    raw_history = await history_manager.get_history(session_id)
+    raw_history = await history_manager.get_history(session_id, user_id=user_id)
     if not raw_history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -78,18 +78,18 @@ async def get_session_history(
 @router.delete(
     "/{session_id}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def delete_session(
     session_id: str,
     history_manager: HistoryManager = Depends(get_history_manager),
+    user_id: str = Depends(verify_api_key),
 ) -> dict:
     """
-    Clears all stored message history for a session.
+    Clears all stored message history for a session owned by the caller.
     Idempotent — deleting a non-existent session returns 200 with a note.
     """
-    count_before = await history_manager.get_message_count(session_id)
-    await history_manager.clear_history(session_id)
+    count_before = await history_manager.get_message_count(session_id, user_id=user_id)
+    await history_manager.clear_history(session_id, user_id=user_id)
 
     if count_before == 0:
         return {
@@ -98,7 +98,7 @@ async def delete_session(
             "messages_deleted": 0,
         }
 
-    logger.info("Cleared %d messages for session '%s'.", count_before, session_id)
+    logger.info("Cleared %d messages for session '%s' by user '%s'.", count_before, session_id, user_id)
     return {
         "message": "Session history cleared successfully.",
         "session_id": session_id,
