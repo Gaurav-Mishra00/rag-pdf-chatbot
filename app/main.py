@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+import anyio
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -81,9 +82,12 @@ def create_app() -> FastAPI:
         components = {}
 
         # Check 1: SQLite reachability
-        try:
+        def _check_db():
             with get_db_connection() as conn:
                 conn.execute("SELECT 1").fetchone()
+
+        try:
+            await anyio.to_thread.run_sync(_check_db)
             components["database"] = "ok"
         except Exception as exc:
             logger.error("Readiness check — DB not reachable: %s", exc)

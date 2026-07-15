@@ -237,7 +237,9 @@ def test_health_liveness(client):
 
 def test_health_ready_ok(client):
     """GET /health/ready returns 200 when DB is reachable and FAISS index exists."""
-    # After test fixtures run, both DB and index should be present
+    from app.api.deps import get_vector_store
+    get_vector_store()
+
     resp = client.get("/health/ready")
     assert resp.status_code == 200
     data = resp.json()
