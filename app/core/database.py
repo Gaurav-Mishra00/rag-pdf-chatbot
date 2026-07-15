@@ -125,6 +125,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE chat_history ADD COLUMN user_id TEXT DEFAULT 'default_user';")
             logger.info("'chat_history' table migration completed.")
 
+        # Create performance optimization indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_session_user ON chat_history (session_id, user_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks (document_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_user ON documents (user_id);")
+
     logger.info("Database tables initialized successfully.")
 
 

@@ -69,6 +69,8 @@ class RAGService:
                 "Vector store is empty. Upload and ingest at least one document before querying."
             )
 
+        self._vector_store_underlying = self.vector_store.vector_store
+
         retriever = self.vector_store.vector_store.as_retriever(
             search_type="similarity",
             search_kwargs={"k": 4},
@@ -105,6 +107,11 @@ class RAGService:
         ``source_documents`` preserve the original ``metadata`` dict
         (including ``source`` and ``page``) attached during PDF ingestion.
         """
+        # If the underlying vector store instance has changed/been reset, clear cached chain
+        underlying = getattr(self, "_vector_store_underlying", None)
+        if self.vector_store.vector_store is not underlying:
+            self._chain = None
+
         if self._chain is None:
             try:
                 self._build_chain()
@@ -126,17 +133,28 @@ class RAGService:
         source_docs: List[Document] = result.get("context", [])
 
         # Fetch similarity search scores to enrich metadata
-        scores_map = {}
         try:
             search_results = self.vector_store.similarity_search(query, k=8)
-            for res_doc, score in search_results:
-                scores_map[res_doc.page_content] = float(score)
         except Exception as exc:
             logger.warning("Could not retrieve similarity scores: %s", exc)
+            search_results = []
 
-        # Enrich source_docs with the calculated scores
+        # Enrich source_docs with the calculated scores (avoiding duplicate text collision)
         for doc in source_docs:
-            doc.metadata["score"] = scores_map.get(doc.page_content, 0.0)
+            match_score = 0.0
+            # Try to match both page_content and metadata exactly (correctness check)
+            for res_doc, score in search_results:
+                if res_doc.page_content == doc.page_content and res_doc.metadata == doc.metadata:
+                    match_score = float(score)
+                    break
+            else:
+                # Fallback: match by page_content only if no exact match is found
+                for res_doc, score in search_results:
+                    if res_doc.page_content == doc.page_content:
+                        match_score = float(score)
+                        break
+            
+            doc.metadata["score"] = match_score
 
         logger.info(
             "answer_query: query=%r | sources=%d", query, len(source_docs)

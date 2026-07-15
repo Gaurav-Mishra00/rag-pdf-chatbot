@@ -35,6 +35,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to run startup storage reconciliation: %s", e)
 
+    # Warn if using default API key in non-testing environments
+    if settings.API_KEY == "change_me_in_production" and settings.APP_ENV != "testing":
+        logger.warning(
+            "SECURITY WARNING: The API_KEY is configured with the default value 'change_me_in_production'. "
+            "Please configure a unique secure API_KEY in production."
+        )
+
     logger.info("Required local directories and database verified.")
     yield
     # Shutdown event

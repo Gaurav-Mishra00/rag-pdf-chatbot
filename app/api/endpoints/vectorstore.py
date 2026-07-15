@@ -56,7 +56,7 @@ async def get_index_status(
         "index_type": "FAISS",
         "has_local_index": is_active,
         "vector_count": vector_store.count,
-        "index_path": str(settings.FAISS_INDEX_PATH),
+        "index_path": os.path.basename(settings.FAISS_INDEX_PATH),
         "index_file_size_kb": round(file_size_bytes / 1024, 2) if file_size_bytes else 0,
     }
 

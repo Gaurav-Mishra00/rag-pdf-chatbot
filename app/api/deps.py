@@ -21,6 +21,8 @@ from app.services.history_manager import HistoryManager
 _history_manager = HistoryManager()
 _vector_store: Optional[FAISSVectorStore] = None
 _vector_store_lock = threading.Lock()
+_rag_service: Optional[RAGService] = None
+_rag_service_lock = threading.Lock()
 
 
 def get_history_manager() -> HistoryManager:
@@ -110,9 +112,11 @@ def reset_vector_store() -> None:
     """
     Resets the vector store singleton instance. Useful for testing isolation.
     """
-    global _vector_store
+    global _vector_store, _rag_service
     with _vector_store_lock:
         _vector_store = None
+    with _rag_service_lock:
+        _rag_service = None
 
 
 def get_pdf_processor() -> PDFProcessorService:
@@ -127,6 +131,12 @@ def get_rag_service(
     llm: BaseChatModel = Depends(get_llm),
 ) -> RAGService:
     """
-    FastAPI dependency that returns the RAGService orchestrator.
+    FastAPI dependency that returns the shared RAGService singleton instance.
+    Initializes the service once (thread-safe) on first use.
     """
-    return RAGService(vector_store=vector_store, llm=llm)
+    global _rag_service
+    if _rag_service is None:
+        with _rag_service_lock:
+            if _rag_service is None:
+                _rag_service = RAGService(vector_store=vector_store, llm=llm)
+    return _rag_service
