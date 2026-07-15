@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -26,8 +27,39 @@ class SourceDocumentSchema(BaseModel):
     score: Optional[float] = None
 
 
+class ChatResponseMetadata(BaseModel):
+    """Typed metadata returned with every chat response."""
+    model_name: str
+    llm_provider: str
+    embeddings_provider: str
+
+
 class ChatResponse(BaseModel):
     session_id: str
     answer: str
     sources: List[SourceDocumentSchema] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: ChatResponseMetadata
+
+
+# ---------------------------------------------------------------------------
+# Session schemas
+# ---------------------------------------------------------------------------
+
+class SessionSummary(BaseModel):
+    """Summary row for a single chat session (used in list response)."""
+    session_id: str
+    message_count: int
+    last_activity: Optional[datetime] = None
+
+
+class SessionListResponse(BaseModel):
+    """Response model for GET /sessions."""
+    sessions: List[SessionSummary]
+    total: int
+
+
+class SessionHistoryResponse(BaseModel):
+    """Response model for GET /sessions/{session_id}."""
+    session_id: str
+    messages: List[Message]
+    total: int

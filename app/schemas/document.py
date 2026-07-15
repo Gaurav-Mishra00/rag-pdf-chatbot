@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
@@ -24,11 +25,14 @@ class DocumentUploadResponse(BaseModel):
 
 
 class DocumentStatusResponse(BaseModel):
+    """Full metadata for a single stored document."""
     document_id: str
     filename: str
     status: IngestionStatus
     chunk_count: Optional[int] = None
+    file_size_bytes: Optional[int] = None
     error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class SearchQuerySchema(BaseModel):
