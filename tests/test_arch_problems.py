@@ -162,7 +162,7 @@ def test_threading_lock_is_module_level_and_reentrant_safe():
     from app.vectorstore import faiss_store
 
     lock = faiss_store._faiss_write_lock
-    assert isinstance(lock, type(threading.Lock())), "Must be a threading.Lock"
+    assert isinstance(lock, (type(threading.Lock()), type(threading.RLock()))), "Must be a threading.Lock or threading.RLock"
 
     # Lock must be released after add_documents completes
     store = FAISSVectorStore(embeddings=FakeEmbeddings(size=1536))

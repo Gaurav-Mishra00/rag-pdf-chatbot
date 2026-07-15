@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # deployments, replace FAISS with a server-backed vector store (e.g.
 # Pinecone, Weaviate, or pgvector) that handles its own concurrency.
 # -----------------------------------------------------------------------
-_faiss_write_lock = threading.Lock()
+_faiss_write_lock = threading.RLock()
 
 
 class FAISSVectorStore:
@@ -237,19 +237,21 @@ class FAISSVectorStore:
 
     @property
     def count(self) -> int:
-        """Returns the number of vectors currently stored in the index."""
-        if self.vector_store is None or self.vector_store.index is None:
-            return 0
-        return self.vector_store.index.ntotal
+        """Returns the number of vectors currently stored in the index (thread-safe)."""
+        with _faiss_write_lock:
+            if self.vector_store is None or self.vector_store.index is None:
+                return 0
+            return self.vector_store.index.ntotal
 
     @property
     def index_file_size_bytes(self) -> int:
         """
-        Returns the size in bytes of the persisted ``index.faiss`` file on disk.
+        Returns the size in bytes of the persisted ``index.faiss`` file on disk (thread-safe).
         Returns 0 if the file does not exist (i.e. index has never been saved).
         """
-        index_file = os.path.join(settings.FAISS_INDEX_PATH, "index.faiss")
-        try:
-            return os.path.getsize(index_file)
-        except OSError:
-            return 0
+        with _faiss_write_lock:
+            index_file = os.path.join(settings.FAISS_INDEX_PATH, "index.faiss")
+            try:
+                return os.path.getsize(index_file)
+            except OSError:
+                return 0

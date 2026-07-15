@@ -25,6 +25,16 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.dirname(settings.FAISS_INDEX_PATH), exist_ok=True)
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     init_db()
+
+    # Self-healing storage reconciliation on startup
+    try:
+        from app.api.deps import get_vector_store
+        from app.core.database import reconcile_storage_layers
+        vector_store = get_vector_store()
+        reconcile_storage_layers(vector_store, settings.UPLOAD_DIR)
+    except Exception as e:
+        logger.error("Failed to run startup storage reconciliation: %s", e)
+
     logger.info("Required local directories and database verified.")
     yield
     # Shutdown event
