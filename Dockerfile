@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ COPY requirements.lock .
 RUN pip install --no-cache-dir --user -r requirements.lock
 
 # Stage 2: Production runtime stage
-FROM python:3.11-slim AS runner
+FROM python:3.12-slim AS runner
 
 WORKDIR /app
 
@@ -36,6 +36,6 @@ RUN mkdir -p /app/data/backups /app/data/uploads /app/data/faiss_index
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/api/v1/health || exit 1
+  CMD curl -f http://localhost:8000/health || exit 1
 
 ENTRYPOINT ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
