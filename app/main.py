@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 import anyio
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import get_db_connection, init_db
@@ -85,6 +86,14 @@ def create_app() -> FastAPI:
 
     # Register endpoints router
     app.include_router(api_router, prefix="/api/v1")
+
+    # Serve the Atlas frontend from the same origin as the API.
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def frontend_index():
+        return FileResponse(os.path.join(static_dir, "index.html"))
 
     # Simple healthcheck endpoint (liveness — always 200 if process is running)
     @app.get("/health", tags=["System"])
