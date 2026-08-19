@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
     <div class="app-shell">
       <aside class="sidebar" aria-label="Workspace navigation">
         <div class="brand-row"><div class="brand-mark">A</div><div><strong>atlas</strong><span>PDF intelligence</span></div></div>
@@ -24,18 +25,18 @@
       </aside>
 
       <main class="main-panel">
-        <header class="topbar"><div class="breadcrumb"><span class="eyebrow">WORKSPACE /</span><strong>ASK ATLAS</strong></div><div class="top-actions"><button class="icon-btn" id="refreshBtn" title="Refresh workspace">↻</button><button class="avatar" title="Personal workspace">GM</button></div></header>
-        <section class="hero"><div><div class="eyebrow accent">RESEARCH, REFINED</div><h1>Make every document<br /><span>answerable.</span></h1><p>Upload your PDFs and ask precise questions. Atlas keeps the source context close, so you can move from reading to reasoning without losing the thread.</p></div><div class="hero-note"><span class="note-line"></span><span>Private by default.<br />Built for focused work.</span></div></section>
+        <header class="topbar"><div class="breadcrumb"><span class="eyebrow">WORKSPACE /</span><strong>ASK ATLAS</strong></div><div class="top-actions"><span class="saved-indicator" id="savedIndicator"><i></i> Autosaved</span><button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">☼</button><button class="icon-btn" id="refreshBtn" title="Refresh workspace">↻</button><button class="avatar" title="Personal workspace">GM</button></div></header>
+        <section class="hero"><div class="hero-copy"><div class="eyebrow accent">RESEARCH, REFINED <span class="spark">✦</span></div><h1>Make every document<br /><span>answerable.</span></h1><p>Upload your PDFs and ask precise questions. Atlas keeps the source context close, so you can move from reading to reasoning without losing the thread.</p><div class="hero-tags"><span>Source-grounded</span><span>Private workspace</span><span>Fast retrieval</span></div></div><div class="hero-note"><span class="note-line"></span><span>Private by default.<br />Built for focused work.</span></div></section>
 
         <section class="workspace-grid">
           <div class="chat-column">
             <div class="section-heading"><div><span class="eyebrow">CONVERSATION</span><h2 id="conversationTitle">Start with a question</h2></div><span class="session-chip" id="sessionChip">NEW SESSION</span></div>
-            <div id="chatMessages" class="chat-messages"><div class="welcome-card"><div class="welcome-icon">✦</div><div><h3>Your documents, in conversation.</h3><p>Ask Atlas to summarize a report, find a specific clause, or connect ideas across your uploaded PDFs.</p><div class="suggestion-row"><button class="suggestion">Summarize the key findings</button><button class="suggestion">What are the main risks?</button></div></div></div></div>
-            <form id="chatForm" class="composer"><textarea id="messageInput" rows="1" placeholder="Ask a question about your documents…" aria-label="Ask a question"></textarea><div class="composer-footer"><span class="composer-hint">Atlas cites the source for every answer</span><button class="send-btn" id="sendBtn" type="submit">Send <span>↗</span></button></div></form>
+            <div class="chat-toolbar"><span class="pulse-label"><i></i> Atlas is ready</span><span class="toolbar-hint">Shift + Enter for a new line</span></div><div id="chatMessages" class="chat-messages"><div class="welcome-card"><div class="welcome-icon">✦</div><div><h3>Your documents, in conversation.</h3><p>Ask Atlas to summarize a report, find a specific clause, or connect ideas across your uploaded PDFs.</p><div class="suggestion-row"><button class="suggestion">Summarize the key findings</button><button class="suggestion">What are the main risks?</button></div></div></div></div>
+            <form id="chatForm" class="composer"><div class="composer-glow"></div><textarea id="messageInput" rows="1" placeholder="Ask a question about your documents…" aria-label="Ask a question"></textarea><div class="composer-footer"><span class="composer-hint">Atlas cites the source for every answer</span><button class="send-btn" id="sendBtn" type="submit">Send <span>↗</span></button></div></form>
           </div>
           <aside class="context-column">
             <div class="context-card upload-card"><div class="card-heading"><div><span class="eyebrow">SOURCE LIBRARY</span><h3>Your documents</h3></div><span class="file-count" id="fileCount">0 FILES</span></div><label for="fileInput" class="drop-zone" id="dropZone"><input id="fileInput" type="file" accept="application/pdf,.pdf" hidden /><div class="upload-glyph">↑</div><strong>Drop a PDF here</strong><span>or <u>browse your files</u></span><small>PDF only · up to 50 MB</small></label><div id="documentList" class="document-list"><div class="empty-docs"><span>▧</span><p>Your source library is empty.<br />Upload a PDF to begin.</p></div></div></div>
-            <div class="context-card status-card"><div class="card-heading"><div><span class="eyebrow">SYSTEM STATUS</span><h3>Retrieval engine</h3></div><span class="live-pill"><i></i> LIVE</span></div><div class="status-metric"><strong id="vectorCount">0</strong><span>indexed vectors</span></div><div class="status-details"><div><span>Vector store</span><b id="storeStatus">Waiting</b></div><div><span>Model</span><b id="modelStatus">—</b></div></div></div>
+            <div class="context-card status-card"><div class="card-heading"><div><span class="eyebrow">SYSTEM STATUS</span><h3>Retrieval engine</h3></div><span class="live-pill"><i></i> LIVE</span></div><div class="status-bar"><span style="width: 74%"></span></div><div class="status-metric"><strong id="vectorCount">0</strong><span>indexed vectors</span></div><div class="status-details"><div><span>Vector store</span><b id="storeStatus">Waiting</b></div><div><span>Model</span><b id="modelStatus">—</b></div></div></div>
           </aside>
         </section>
         <footer class="footer"><span>Atlas workspace</span><span>RAG / FAISS / LLM</span></footer>
