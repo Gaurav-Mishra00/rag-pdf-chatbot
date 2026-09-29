@@ -13,7 +13,7 @@ direct pipeline that gives us full control over:
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -82,6 +82,36 @@ def _convert_chat_history(history: List[Dict[str, str]]) -> List[BaseMessage]:
     return messages
 
 
+def _extract_text_content(content: Any) -> str:
+    """Safely extracts text content from LLM response content across providers.
+
+    Handles strings, lists of strings, lists of structured content blocks
+    (e.g., Gemini/Anthropic [{'type': 'text', 'text': '...'}]), and objects
+    with .text or .content attributes.
+    """
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text_val = item.get("text") or item.get("content") or ""
+                if text_val:
+                    parts.append(str(text_val))
+            elif hasattr(item, "text"):
+                parts.append(str(item.text))
+            elif hasattr(item, "content"):
+                parts.append(_extract_text_content(item.content))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(content)
+
+
 def _build_context_block(docs: List[Document]) -> str:
     """Formats retrieved documents into a numbered context block with source metadata."""
     if not docs:
@@ -144,7 +174,8 @@ class RAGService:
         ]
         try:
             response = self.llm.invoke(messages)
-            standalone = response.content.strip()
+            content = getattr(response, "content", response)
+            standalone = _extract_text_content(content).strip()
             if standalone:
                 logger.debug("Contextualized query: %r -> %r", query, standalone)
                 return standalone
@@ -247,7 +278,8 @@ class RAGService:
 
         try:
             response = self.llm.invoke(messages)
-            answer = response.content.strip()
+            content = getattr(response, "content", response)
+            answer = _extract_text_content(content).strip()
             if not answer:
                 raise GenerationError(
                     "The AI service returned an empty answer. Please try again."
@@ -481,7 +513,8 @@ class RAGService:
             messages = self._build_qa_messages(standalone_query, filtered_docs, lc_history)
             try:
                 for chunk in self.llm.stream(messages):
-                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    raw = getattr(chunk, "content", chunk)
+                    token = _extract_text_content(raw)
                     if token:
                         full_answer += token
                         yield {"type": "token", "token": token}

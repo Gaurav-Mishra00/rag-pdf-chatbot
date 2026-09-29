@@ -404,3 +404,105 @@ def test_get_llm_anthropic(monkeypatch):
             timeout=settings.LLM_TIMEOUT_SECONDS,
             max_retries=1,
         )
+
+
+def test_extract_text_content():
+    """Verify _extract_text_content properly normalizes all content representations."""
+    from app.services.rag_service import _extract_text_content
+
+    assert _extract_text_content(None) == ""
+    assert _extract_text_content("") == ""
+    assert _extract_text_content("Simple string") == "Simple string"
+    assert _extract_text_content(["Part 1 ", "Part 2"]) == "Part 1 Part 2"
+    assert (
+        _extract_text_content([{"type": "text", "text": "Hello "}, {"type": "text", "text": "World"}])
+        == "Hello World"
+    )
+    assert _extract_text_content([{"type": "text", "content": "From content key"}]) == "From content key"
+
+    class ObjWithText:
+        text = "From attribute text"
+
+    assert _extract_text_content([ObjWithText()]) == "From attribute text"
+
+
+def test_rag_service_handles_list_structured_content():
+    """Verify RAGService does not crash when LLM returns list/structured content blocks."""
+    from app.services.rag_service import RAGService
+
+    embeddings = FakeEmbeddings(size=1536)
+    store = FAISSVectorStore(embeddings=embeddings)
+    llm = MagicMock()
+
+    source_doc = Document(
+        page_content="Machine learning involves training models on data.",
+        metadata={"source": "ml_notes.pdf", "page": 1},
+    )
+
+    # Mock LLM returning structured blocks as ChatGoogleGenerativeAI often does
+    mock_response = MagicMock()
+    mock_response.content = [
+        {"type": "text", "text": "Machine learning is a field of AI [Source 1]."}
+    ]
+    llm.invoke.return_value = mock_response
+
+    service = RAGService(vector_store=store, llm=llm)
+
+    with patch.object(store, "similarity_search", return_value=[(source_doc, 0.9)]):
+        with patch("app.services.rag_service.settings") as mock_settings:
+            mock_settings.RETRIEVAL_K = 4
+            mock_settings.CONTEXT_K = 4
+            mock_settings.RERANK_ENABLED = False
+            mock_settings.MIN_SIMILARITY = 0.3
+            mock_settings.RERANK_MIN_SCORE = 0.5
+            mock_settings.CHAT_HISTORY_LIMIT = 5
+
+            answer, sources = service.answer_query(
+                "what is machine learning",
+                [{"role": "user", "content": "hi"}],
+            )
+
+    assert "Machine learning is a field of AI [Source 1]." in answer
+    assert len(sources) == 1
+
+
+def test_rag_service_stream_handles_list_content_chunks():
+    """Verify streaming generator safely extracts tokens from structured chunk content."""
+    from app.services.rag_service import RAGService
+
+    embeddings = FakeEmbeddings(size=1536)
+    store = FAISSVectorStore(embeddings=embeddings)
+    llm = MagicMock()
+
+    source_doc = Document(
+        page_content="Deep learning uses neural networks.",
+        metadata={"source": "dl.pdf", "page": 2},
+    )
+
+    chunk1 = MagicMock()
+    chunk1.content = [{"type": "text", "text": "Deep "}]
+    chunk2 = MagicMock()
+    chunk2.content = [{"type": "text", "text": "learning"}]
+
+    llm.stream.return_value = [chunk1, chunk2]
+    service = RAGService(vector_store=store, llm=llm)
+
+    with patch.object(store, "similarity_search", return_value=[(source_doc, 0.95)]):
+        with patch("app.services.rag_service.settings") as mock_settings:
+            mock_settings.RETRIEVAL_K = 4
+            mock_settings.CONTEXT_K = 4
+            mock_settings.RERANK_ENABLED = False
+            mock_settings.MIN_SIMILARITY = 0.3
+            mock_settings.RERANK_MIN_SCORE = 0.5
+            mock_settings.CHAT_HISTORY_LIMIT = 5
+
+            events = list(service.answer_query_stream("explain deep learning", []))
+
+    token_events = [e for e in events if e.get("type") == "token"]
+    assert len(token_events) == 2
+    assert token_events[0]["token"] == "Deep "
+    assert token_events[1]["token"] == "learning"
+
+    done_event = [e for e in events if e.get("type") == "done"][0]
+    assert done_event["result"].answer == "Deep learning"
+
