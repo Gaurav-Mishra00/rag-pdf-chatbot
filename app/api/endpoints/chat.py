@@ -1,15 +1,39 @@
+import re
 import uuid
-from fastapi import APIRouter, Depends, status
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_rag_service, get_history_manager
 from app.core.config import settings
 from app.core.security import verify_api_key
-from app.schemas.chat import ChatQuery, ChatResponse, ChatResponseMetadata, SourceDocumentSchema
+from app.schemas.chat import (
+    ChatQuery, ChatResponse, ChatResponseMetadata, PipelineTimings,
+    SourceDocumentSchema, EvaluationQuery, EvaluationResponse,
+    RetrievalMetrics, AnswerMetrics,
+)
 from app.services.rag_service import RAGService
 from app.services.history_manager import HistoryManager
+from app.services.errors import GenerationError
 
 from app.core.rate_limiter import check_chat_rate_limit
 
 router = APIRouter()
+
+
+def _build_sources(result) -> list[SourceDocumentSchema]:
+    """Maps RAGResult citations to response schemas."""
+    return [
+        SourceDocumentSchema(
+            document_name=c.document_name,
+            page=c.page,
+            section=c.section or None,
+            snippet=c.snippet,
+            similarity_score=c.similarity_score,
+            rerank_score=c.rerank_score,
+            score=c.rerank_score if c.rerank_score is not None else c.similarity_score,
+            chunk_id=c.chunk_id,
+        )
+        for c in result.citations
+    ]
 
 
 @router.post(
@@ -26,41 +50,123 @@ async def chat_query(
 ) -> ChatResponse:
     """
     Submits a user prompt/question to the RAG chatbot.
-    Retrieves matching documents from FAISS and generates an answer using LLM.
-    Persists and updates conversational history across sessions.
+    Retrieves matching documents from FAISS, optionally reranks them,
+    applies a relevance threshold, generates an answer with inline citations,
+    and persists conversational history across sessions.
     """
     session_id = payload.session_id or f"session-{uuid.uuid4()}"
 
     # 1. Retrieve history
     history = await history_manager.get_history(session_id, user_id=user_id)
 
-    # 2. Run query using history
-    answer, source_docs = rag_service.answer_query(
-        query=payload.message, chat_history=history
-    )
+    # 2. Run the full RAG pipeline
+    try:
+        result = await anyio.to_thread.run_sync(
+            rag_service.answer_query_detailed, payload.message, history
+        )
+    except GenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     # 3. Save turn to history
     await history_manager.add_message(session_id, "user", payload.message, user_id=user_id)
-    await history_manager.add_message(session_id, "assistant", answer, user_id=user_id)
+    await history_manager.add_message(session_id, "assistant", result.answer, user_id=user_id)
 
-    # 4. Map sources with scores
-    sources_response = [
-        SourceDocumentSchema(
-            document_name=doc.metadata.get("source", "unknown"),
-            page=doc.metadata.get("page"),
-            snippet=doc.page_content,
-            score=doc.metadata.get("score"),
-        )
-        for doc in source_docs
-    ]
+    # 4. Map sources with citation detail
+    sources_response = _build_sources(result)
 
     return ChatResponse(
         session_id=session_id,
-        answer=answer,
+        answer=result.answer,
         sources=sources_response,
         metadata=ChatResponseMetadata(
             model_name=settings.LLM_MODEL_NAME,
             llm_provider=settings.LLM_PROVIDER,
             embeddings_provider=settings.EMBEDDINGS_PROVIDER,
         ),
+        relevance_passed=result.relevance_passed,
+        timings=PipelineTimings(
+            retrieval_ms=round(result.retrieval_time_ms, 1),
+            rerank_ms=round(result.rerank_time_ms, 1),
+            generation_ms=round(result.generation_time_ms, 1),
+            total_ms=round(result.total_time_ms, 1),
+        ),
+    )
+
+
+@router.post(
+    "/evaluate",
+    response_model=EvaluationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def evaluate_query(
+    payload: EvaluationQuery,
+    rag_service: RAGService = Depends(get_rag_service),
+    user_id: str = Depends(verify_api_key),
+) -> EvaluationResponse:
+    """
+    Evaluates retrieval and answer quality for a given question.
+
+    Returns detailed metrics including:
+    - **Retrieval metrics**: candidate counts, similarity score statistics,
+      relevance gate status, and source coverage against expected sources.
+    - **Answer metrics**: length, citation count, unique sources cited,
+      and whether the model declined to answer.
+    - **Pipeline timings**: millisecond breakdowns for each stage.
+
+    Useful for offline evaluation, regression testing, and prompt tuning.
+    """
+    try:
+        result = await anyio.to_thread.run_sync(
+            rag_service.answer_query_detailed, payload.question, []
+        )
+    except GenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    # Compute retrieval metrics
+    sim_scores = [c.similarity_score for c in result.citations]
+    rerank_scores = [c.rerank_score for c in result.citations if c.rerank_score is not None]
+
+    source_coverage = None
+    if payload.expected_sources:
+        retrieved_sources = {c.document_name for c in result.citations}
+        matched = sum(1 for s in payload.expected_sources if s in retrieved_sources)
+        source_coverage = matched / len(payload.expected_sources) if payload.expected_sources else 0.0
+
+    retrieval_metrics = RetrievalMetrics(
+        candidates_retrieved=result.candidates_before_rerank,
+        candidates_after_rerank=result.candidates_after_rerank,
+        mean_similarity_score=sum(sim_scores) / len(sim_scores) if sim_scores else 0.0,
+        max_similarity_score=max(sim_scores) if sim_scores else 0.0,
+        min_similarity_score=min(sim_scores) if sim_scores else 0.0,
+        mean_rerank_score=sum(rerank_scores) / len(rerank_scores) if rerank_scores else None,
+        relevance_passed=result.relevance_passed,
+        source_coverage=source_coverage,
+    )
+
+    # Compute answer metrics
+    citation_pattern = re.compile(r"\[Source\s+\d+\]")
+    citation_matches = citation_pattern.findall(result.answer)
+    unique_citations = set(citation_matches)
+
+    answer_metrics = AnswerMetrics(
+        answer_length=len(result.answer),
+        citation_count=len(citation_matches),
+        unique_sources_cited=len(unique_citations),
+        has_i_dont_know=not result.relevance_passed or "don't have enough" in result.answer.lower(),
+    )
+
+    sources_response = _build_sources(result)
+
+    return EvaluationResponse(
+        question=payload.question,
+        answer=result.answer,
+        retrieval_metrics=retrieval_metrics,
+        answer_metrics=answer_metrics,
+        timings=PipelineTimings(
+            retrieval_ms=round(result.retrieval_time_ms, 1),
+            rerank_ms=round(result.rerank_time_ms, 1),
+            generation_ms=round(result.generation_time_ms, 1),
+            total_ms=round(result.total_time_ms, 1),
+        ),
+        sources=sources_response,
     )

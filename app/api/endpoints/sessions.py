@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from app.api.deps import get_history_manager
 from app.core.security import verify_api_key
@@ -24,8 +24,8 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
 )
 async def list_sessions(
-    limit: int = 10,
-    offset: int = 0,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     history_manager: HistoryManager = Depends(get_history_manager),
     user_id: str = Depends(verify_api_key),
 ) -> SessionListResponse:

@@ -26,15 +26,18 @@ def test_rate_limiting_chat(client):
     Verify that sending more than 30 chat requests in under 60 seconds
     correctly triggers a 429 Too Many Requests response.
     """
-    chat_limiter.clear()
     from unittest.mock import patch
+    from app.core.config import settings
+    from app.services.rag_service import RAGResult
     
-    with patch("app.core.rate_limiter.settings.APP_ENV", "production"):
+    original_env = settings.APP_ENV
+    settings.APP_ENV = "production"
+    try:
         # 1. Send 30 successful requests
         for i in range(30):
             # We query status endpoint or a lightweight check, or chat query.
             # Let's mock answer_query to avoid invoking fake LLM 30 times.
-            with patch("app.services.rag_service.RAGService.answer_query", return_value=("ans", [])):
+            with patch("app.services.rag_service.RAGService.answer_query_detailed", return_value=RAGResult(answer="ans", relevance_passed=True)):
                 resp = client.post(
                     "/api/v1/chat/query",
                     json={"message": f"test message {i}"},
@@ -43,7 +46,7 @@ def test_rate_limiting_chat(client):
                 assert resp.status_code == 200
 
         # 2. The 31st request must trigger 429
-        with patch("app.services.rag_service.RAGService.answer_query", return_value=("ans", [])):
+        with patch("app.services.rag_service.RAGService.answer_query_detailed", return_value=RAGResult(answer="ans", relevance_passed=True)):
             resp_blocked = client.post(
                 "/api/v1/chat/query",
                 json={"message": "blocked query"},
@@ -51,6 +54,8 @@ def test_rate_limiting_chat(client):
             )
             assert resp_blocked.status_code == 429
             assert resp_blocked.json()["detail"] == "Rate limit exceeded. Please try again later."
+    finally:
+        settings.APP_ENV = original_env
 
     # Cleanup
     chat_limiter.clear()

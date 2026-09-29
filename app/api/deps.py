@@ -1,12 +1,12 @@
 from typing import Generator, Optional
 import threading
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
-# We import mock/fake objects if keys are not present to allow application startup
-from langchain_community.embeddings import FakeEmbeddings
-from langchain_community.chat_models import FakeListChatModel
+# Fake providers are used only in the testing environment.
+from langchain_core.embeddings import FakeEmbeddings
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 # For actual implementations:
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -16,9 +16,12 @@ from app.vectorstore.faiss_store import FAISSVectorStore
 from app.services.pdf_processor import PDFProcessorService
 from app.services.rag_service import RAGService
 from app.services.history_manager import HistoryManager
+from app.vectorstore.native_faiss import IndexCompatibilityError
 
 # Singleton instances
 _history_manager = HistoryManager()
+_embeddings: Optional[Embeddings] = None
+_embeddings_lock = threading.Lock()
 _vector_store: Optional[FAISSVectorStore] = None
 _vector_store_lock = threading.Lock()
 _rag_service: Optional[RAGService] = None
@@ -33,6 +36,19 @@ def get_history_manager() -> HistoryManager:
 
 
 def get_embeddings() -> Embeddings:
+    """Reuse one embedding model per process, including concurrent first requests.
+
+    Restart the process after changing provider/model configuration. An existing
+    FAISS index must always be queried with the embedding model that created it.
+    """
+    global _embeddings
+    with _embeddings_lock:
+        if _embeddings is None:
+            _embeddings = _create_embeddings()
+        return _embeddings
+
+
+def _create_embeddings() -> Embeddings:
     """
     FastAPI dependency that returns the configured Embeddings provider.
     """
@@ -48,12 +64,15 @@ def get_embeddings() -> Embeddings:
             model=settings.EMBEDDING_MODEL_NAME,
         )
     elif settings.EMBEDDINGS_PROVIDER == "huggingface":
-        from langchain_community.embeddings import HuggingFaceEmbeddings
+        from langchain_huggingface import HuggingFaceEmbeddings
         return HuggingFaceEmbeddings(
-            model_name=settings.EMBEDDING_MODEL_NAME
+            model_name=settings.EMBEDDING_MODEL_NAME,
+            model_kwargs={"device": settings.EMBEDDING_DEVICE},
+            encode_kwargs={"normalize_embeddings": True, "batch_size": settings.EMBEDDING_BATCH_SIZE},
         )
-    # Fallback to Fake/Mock Embeddings if not configured or keys are missing
-    return FakeEmbeddings(size=1536)
+    if settings.APP_ENV == "testing":
+        return FakeEmbeddings(size=1536)
+    raise HTTPException(503, "Embeddings provider API key is missing. Configure the server's .env file.")
 
 
 def get_llm() -> BaseChatModel:
@@ -65,6 +84,8 @@ def get_llm() -> BaseChatModel:
             api_key=settings.OPENAI_API_KEY,
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=1,
         )
     elif settings.LLM_PROVIDER == "google" and settings.GOOGLE_API_KEY:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -72,6 +93,9 @@ def get_llm() -> BaseChatModel:
             google_api_key=settings.GOOGLE_API_KEY,
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            # This adapter counts total attempts: two means one retry.
+            max_retries=2,
         )
     elif settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
         from langchain_anthropic import ChatAnthropic
@@ -79,9 +103,12 @@ def get_llm() -> BaseChatModel:
             api_key=settings.ANTHROPIC_API_KEY,
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=1,
         )
-    # Fallback to Fake/Mock LLM if not configured
-    return FakeListChatModel(responses=["This is a mock response from FakeListChatModel."])
+    if settings.APP_ENV == "testing":
+        return FakeListChatModel(responses=["This is a mock response from FakeListChatModel."])
+    raise HTTPException(503, "AI provider API key is missing. Configure the server's .env file.")
 
 
 def get_vector_store(embeddings: Embeddings = Depends(get_embeddings)) -> FAISSVectorStore:
@@ -100,7 +127,10 @@ def get_vector_store(embeddings: Embeddings = Depends(get_embeddings)) -> FAISSV
             if _vector_store is None:
                 store = FAISSVectorStore(embeddings=embeddings)
                 # Attempts to load existing FAISS index on disk
-                loaded = store.load_index()
+                try:
+                    loaded = store.load_index()
+                except (IndexCompatibilityError, ValueError, OSError) as exc:
+                    raise HTTPException(503, "Vector index requires migration or recovery. Run python -m scripts.reindex with the server stopped.") from exc
                 if not loaded:
                     # Create an empty template index if not found
                     store.create_empty_index()
@@ -112,18 +142,20 @@ def reset_vector_store() -> None:
     """
     Resets the vector store singleton instance. Useful for testing isolation.
     """
-    global _vector_store, _rag_service
+    global _vector_store, _rag_service, _embeddings
     with _vector_store_lock:
         _vector_store = None
     with _rag_service_lock:
         _rag_service = None
+    with _embeddings_lock:
+        _embeddings = None
 
 
 def get_pdf_processor() -> PDFProcessorService:
     """
     FastAPI dependency that returns the PDF Processor service.
     """
-    return PDFProcessorService()
+    return PDFProcessorService(chunk_size=settings.CHUNK_SIZE, chunk_overlap=settings.CHUNK_OVERLAP)
 
 
 def get_rag_service(

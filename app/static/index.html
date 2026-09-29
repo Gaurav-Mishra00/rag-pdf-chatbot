@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG PDF Chatbot Client</title>
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- Control / Header Bar -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">🚀</span>
+                <h1>RAG PDF Chatbot</h1>
+            </div>
+            <div class="status-actions">
+                <div id="server-status" class="status-indicator loading" title="Checking server status...">
+                    <span class="status-dot"></span>
+                    <span id="status-text" class="status-label">Checking Server...</span>
+                </div>
+                <button id="btn-open-docs" class="btn btn-secondary">
+                    <span class="btn-icon">📁</span> Document Manager
+                </button>
+                <button id="btn-open-settings" class="btn btn-secondary">
+                    <span class="btn-icon">⚙️</span> API Settings
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <div class="main-layout">
+            <!-- Sidebar -->
+            <aside class="sidebar" aria-label="Sessions">
+                <div class="sidebar-header">
+                    <button id="btn-new-chat" class="btn btn-primary btn-full">
+                        <span class="btn-icon">💬</span> New Chat Session
+                    </button>
+                </div>
+                
+                <!-- Sessions List -->
+                <div id="sessions-container" class="sessions-list-wrapper">
+                    <div class="list-placeholder">Loading sessions...</div>
+                </div>
+
+                <!-- Sidebar Footer (Pagination) -->
+                <div class="sidebar-footer">
+                    <button id="btn-prev-sessions" class="btn btn-sm btn-icon-only" aria-label="Previous page" disabled>&larr;</button>
+                    <span id="sessions-page-indicator" class="page-indicator">Page 1</span>
+                    <button id="btn-next-sessions" class="btn btn-sm btn-icon-only" aria-label="Next page" disabled>&rarr;</button>
+                </div>
+            </aside>
+
+            <!-- Chat Workspace -->
+            <main class="chat-workspace" aria-label="Chat Workspace">
+                <!-- Messages Area -->
+                <div id="chat-messages" class="chat-messages-container">
+                    <div class="welcome-container">
+                        <h2>Welcome to RAG PDF Chatbot</h2>
+                        <p>Configure your API Key and upload PDF documents to get started. All searches are securely isolated to your credential.</p>
+                        <div class="setup-quick-actions">
+                            <button id="welcome-setup-key" class="btn btn-primary">Configure API Key</button>
+                            <button id="welcome-upload-pdf" class="btn btn-secondary">Upload PDF Document</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Composer Input Area -->
+                <div class="composer-container">
+                    <form id="chat-form" class="composer-form">
+                        <textarea id="prompt-input" class="composer-textarea" placeholder="Ask a question about your uploaded PDF documents... (Enter to send, Shift+Enter for new line)" max-length="4000" rows="1" required disabled></textarea>
+                        <div class="composer-bottom">
+                            <span id="char-counter" class="char-counter">0 / 4000</span>
+                            <button id="btn-send-message" type="submit" class="btn btn-primary" disabled>
+                                Send <span class="send-icon">&rarr;</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </main>
+        </div>
+
+        <!-- API Settings Modal -->
+        <div id="settings-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h2>API Settings</h2>
+                    <button id="btn-close-settings" class="btn-close" aria-label="Close settings">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="warning-banner">
+                        <p><strong>Security Notice:</strong> Your API Key is stored directly in your browser. Any XSS vulnerability could expose it. Use sessionStorage for enhanced session security.</p>
+                    </div>
+                    <form id="settings-form">
+                        <div class="form-group">
+                            <label for="input-api-key">API Key (X-API-Key Header)</label>
+                            <div class="password-input-wrapper">
+                                <input type="password" id="input-api-key" value="change_me_in_production" placeholder="Enter X-API-Key credential" autocomplete="off">
+                                <button type="button" id="btn-toggle-key-visibility" class="btn btn-sm btn-secondary">Show</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Storage Strategy</label>
+                            <div class="radio-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="storage-type" value="session" checked>
+                                    <span>Session Storage (Cleared when tab closes)</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="storage-type" value="local">
+                                    <span>Local Storage (Persistent across restarts)</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-actions">
+                            <button type="button" id="btn-test-connection" class="btn btn-secondary">Test Connection</button>
+                            <button type="button" id="btn-forget-key" class="btn btn-danger">Forget Key</button>
+                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Document Manager Modal -->
+        <div id="docs-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
+            <div class="modal-card modal-large">
+                <div class="modal-header">
+                    <h2>Document Manager</h2>
+                    <button id="btn-close-docs" class="btn-close" aria-label="Close document manager">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Upload Section -->
+                    <div class="upload-section">
+                        <h3>Ingest New Document</h3>
+                        <div id="drag-drop-zone" class="drag-drop-zone">
+                            <span class="upload-cloud-icon">☁️</span>
+                            <p>Drag and drop your PDF here, or <span class="browse-link">browse files</span></p>
+                            <span class="file-limits-label">PDF format only, maximum 50 MB</span>
+                            <input type="file" id="file-input" accept=".pdf" class="hidden-file-input">
+                        </div>
+                        <!-- Uploading/Progress Area -->
+                        <div id="upload-progress-container" class="upload-progress-container hidden">
+                            <div class="progress-info-row">
+                                <span id="uploading-filename">document.pdf</span>
+                                <span id="upload-percentage">0%</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div id="upload-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="upload-status-details" class="status-details">Starting upload...</span>
+                        </div>
+                    </div>
+
+                    <!-- Documents Table/Listing -->
+                    <div class="docs-list-section">
+                        <h3>Your Ingested PDFs</h3>
+                        <div class="table-wrapper">
+                            <table class="docs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Filename</th>
+                                        <th>Size</th>
+                                        <th>Chunks</th>
+                                        <th>Ingested At</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="docs-table-body">
+                                    <tr>
+                                        <td colspan="6" class="table-empty">Loading documents...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <!-- Pagination controls -->
+                        <div class="table-footer">
+                            <button id="btn-prev-docs" class="btn btn-sm" disabled>Previous</button>
+                            <span id="docs-page-indicator" class="page-indicator">Page 1</span>
+                            <button id="btn-next-docs" class="btn btn-sm" disabled>Next</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global Toast Container -->
+        <div id="toast-container" class="toast-container"></div>
+    </div>
+    
+    <script src="/static/index.js?v=20260929"></script>
+</body>
+</html>

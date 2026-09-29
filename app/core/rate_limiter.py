@@ -9,7 +9,8 @@ import time
 import logging
 from collections import defaultdict
 import threading
-from fastapi import Request, HTTPException, status
+from fastapi import Request, HTTPException, status, Depends
+from app.core.security import verify_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ chat_limiter = RateLimiter(rate_limit_requests=30, period_seconds=60)
 upload_limiter = RateLimiter(rate_limit_requests=10, period_seconds=60)
 
 
-async def check_chat_rate_limit(request: Request):
+async def check_chat_rate_limit(request: Request, user_id: str = Depends(verify_api_key)):
     """
     FastAPI dependency to rate limit chat queries.
     Uses user_id (hashed API key) if available, falling back to client IP.
@@ -64,8 +65,7 @@ async def check_chat_rate_limit(request: Request):
     if settings.APP_ENV == "testing":
         return
 
-    # Verify api key dependency runs first and sets request.state.user_id
-    user_id = getattr(request.state, "user_id", None) or request.client.host
+    # Use the resolved user_id (hashed API key) from verify_api_key dependency
     if chat_limiter.is_rate_limited(user_id):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -73,14 +73,13 @@ async def check_chat_rate_limit(request: Request):
         )
 
 
-async def check_upload_rate_limit(request: Request):
+async def check_upload_rate_limit(request: Request, user_id: str = Depends(verify_api_key)):
     """
     FastAPI dependency to rate limit document uploads.
     """
     if settings.APP_ENV == "testing":
         return
 
-    user_id = getattr(request.state, "user_id", None) or request.client.host
     if upload_limiter.is_rate_limited(user_id):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

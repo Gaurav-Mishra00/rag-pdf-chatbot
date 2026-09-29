@@ -1,6 +1,6 @@
 import os
 from typing import Literal
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,13 +45,24 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "data/uploads"
 
     # Embedding Settings
-    EMBEDDINGS_PROVIDER: Literal["openai", "huggingface", "google"] = "openai"
-    EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"
+    EMBEDDINGS_PROVIDER: Literal["openai", "huggingface", "google"] = "huggingface"
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
+    EMBEDDING_DEVICE: str = "cpu"
+    EMBEDDING_BATCH_SIZE: int = Field(default=2, ge=1, le=128)
+    CHUNK_SIZE: int = Field(default=1200, ge=100, le=8000)
+    CHUNK_OVERLAP: int = Field(default=180, ge=0)
+    RETRIEVAL_K: int = Field(default=20, ge=1, le=100)
+    CONTEXT_K: int = Field(default=4, ge=1, le=20)
+    MIN_SIMILARITY: float = Field(default=0.35, ge=-1, le=1)
+    RERANK_ENABLED: bool = True
+    RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    RERANK_MIN_SCORE: float = Field(default=0.5, ge=0, le=1)
 
     # LLM Settings
     LLM_PROVIDER: Literal["openai", "google", "anthropic"] = "openai"
     LLM_MODEL_NAME: str = "gpt-4o"
     TEMPERATURE: float = 0.0
+    LLM_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
 
     # API Keys
     OPENAI_API_KEY: str | None = None
@@ -66,6 +77,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def resolve_file_secrets(self) -> "Settings":
+        if self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
+            raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        if self.CONTEXT_K > self.RETRIEVAL_K:
+            raise ValueError("CONTEXT_K cannot exceed RETRIEVAL_K")
         self.OPENAI_API_KEY = resolve_secret_value(self.OPENAI_API_KEY)
         self.GOOGLE_API_KEY = resolve_secret_value(self.GOOGLE_API_KEY)
         self.ANTHROPIC_API_KEY = resolve_secret_value(self.ANTHROPIC_API_KEY)

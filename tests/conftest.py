@@ -12,6 +12,12 @@ TEST_TEMP_DIR = tempfile.mkdtemp()
 # Force override configuration for isolated test execution
 settings.API_KEY = "test_secret_key"
 settings.APP_ENV = "testing"
+# Unit/integration tests must not use credentials or providers from the local .env.
+settings.LLM_PROVIDER = "openai"
+settings.EMBEDDINGS_PROVIDER = "openai"
+settings.OPENAI_API_KEY = None
+settings.GOOGLE_API_KEY = None
+settings.ANTHROPIC_API_KEY = None
 settings.SQLITE_DB_PATH = os.path.join(TEST_TEMP_DIR, "test_db.sqlite3")
 settings.UPLOAD_DIR = os.path.join(TEST_TEMP_DIR, "test_uploads")
 settings.FAISS_INDEX_PATH = os.path.join(TEST_TEMP_DIR, "test_faiss_index")
@@ -43,8 +49,19 @@ def client() -> TestClient:
     """
     Fixture providing a test client configured to point to the FastAPI app.
     """
-    with TestClient(app) as test_client:
-        yield test_client
+    from app.api.deps import get_embeddings, get_llm
+    from langchain_core.embeddings import FakeEmbeddings
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[get_embeddings] = lambda: FakeEmbeddings(size=1536)
+    app.dependency_overrides[get_llm] = lambda: FakeListChatModel(responses=["Test answer"])
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(overrides)
 
 
 @pytest.fixture(autouse=True)

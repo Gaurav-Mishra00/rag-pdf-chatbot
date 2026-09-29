@@ -1,5 +1,8 @@
 from typing import List
 from io import BytesIO
+from collections import Counter
+import hashlib
+import re
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
@@ -16,6 +19,8 @@ class PDFProcessorService:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
+            separators=["\n\n", "\n", ". ", "? ", "! ", "; ", " ", ""],
+            add_start_index=True,
         )
 
     def extract_text_from_pdf(self, file_content: bytes) -> str:
@@ -53,22 +58,62 @@ class PDFProcessorService:
         except Exception:
             return []
 
-        page_documents = []
-        for page_idx, page in enumerate(reader.pages):
+        # Keep page boundaries so every chunk has an unambiguous citation.
+        extracted_pages = []
+        for page in reader.pages:
             try:
-                page_text = page.extract_text()
+                text = page.extract_text() or ""
             except Exception:
-                page_text = ""
+                text = ""
+            text = re.sub(r"(\w)-\n(?=\w)", r"\1", text)
+            text = re.sub(r"[^\S\n]+", " ", text.replace("\r\n", "\n"))
+            extracted_pages.append(text.strip())
+        boundaries = Counter()
+        for text in extracted_pages:
+            lines = text.splitlines()
+            boundaries.update(set(lines[:1] + lines[-1:]))
+        repeated = {line for line, count in boundaries.items()
+                    if len(extracted_pages) >= 3 and count >= max(3, len(extracted_pages) * 0.6)}
+        content_hash = hashlib.sha256(file_content).hexdigest()
+        page_documents = []
+        active_section = ""
+        for page_idx, page in enumerate(reader.pages):
+            lines = extracted_pages[page_idx].splitlines()
+            if lines and lines[0] in repeated:
+                lines = lines[1:]
+            if lines and lines[-1] in repeated:
+                lines = lines[:-1]
+            page_text = "\n".join(lines).strip()
+            first_line = lines[0].strip() if lines else ""
+            if first_line and len(first_line) <= 100 and (
+                first_line.isupper() or re.match(r"^(?:\d+(?:\.\d+)*\s+|Chapter\s+|Section\s+)", first_line, re.I)
+            ):
+                active_section = first_line
             
             # Skip empty pages or pages with no extractable text
             if page_text and page_text.strip():
                 metadata = {
                     "source": filename,
                     "page": page_idx + 1,
+                    "page_start": page_idx + 1,
+                    "page_end": page_idx + 1,
+                    "page_count": len(extracted_pages),
+                    "section": active_section,
+                    "content_hash": content_hash,
+                    "chunker_version": "page-paragraph-v2",
                 }
                 page_documents.append(Document(page_content=page_text, metadata=metadata))
 
         if not page_documents:
             return []
 
-        return self.splitter.split_documents(page_documents)
+        chunks = self.splitter.split_documents(page_documents)
+        for index, chunk in enumerate(chunks):
+            chunk.metadata.update({
+                "chunk_index": index,
+                "char_count": len(chunk.page_content),
+                "word_count": len(chunk.page_content.split()),
+                "end_index": chunk.metadata["start_index"] + len(chunk.page_content),
+                "chunk_hash": hashlib.sha256(chunk.page_content.encode()).hexdigest(),
+            })
+        return chunks

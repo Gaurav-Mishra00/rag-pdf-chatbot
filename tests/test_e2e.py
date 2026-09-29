@@ -20,58 +20,62 @@ def test_e2e_upload_and_chat(client: TestClient, monkeypatch, tmp_path):
 
     headers = {"X-API-Key": "test_secret_key"}
 
-    # 2. Mock PdfReader to return custom document content
-    mock_page1 = MagicMock()
-    mock_page1.extract_text.return_value = (
-        "FastAPI is a modern, fast (high-performance) web framework for building APIs."
-    )
-    mock_page2 = MagicMock()
-    mock_page2.extract_text.return_value = (
-        "FAISS is a library for efficient similarity search and clustering of dense vectors."
-    )
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    fake_llm = FakeListChatModel(responses=["FAISS is a library for efficient similarity search."])
 
-    with patch("app.services.pdf_processor.PdfReader") as mock_pdf_reader:
-        mock_reader_instance = MagicMock()
-        mock_reader_instance.pages = [mock_page1, mock_page2]
-        mock_pdf_reader.return_value = mock_reader_instance
-
-        # 3. Perform file upload
-        files = {"file": ("manual.pdf", b"%PDF-mock-bytes", "application/pdf")}
-        upload_resp = client.post(
-            "/api/v1/documents/upload", files=files, headers=headers
+    with patch("app.api.deps.get_llm", return_value=fake_llm):
+        # 2. Mock PdfReader to return custom document content
+        mock_page1 = MagicMock()
+        mock_page1.extract_text.return_value = (
+            "FastAPI is a modern, fast (high-performance) web framework for building APIs."
         )
-        assert upload_resp.status_code == 201
-        upload_data = upload_resp.json()
-        assert upload_data["status"] == "completed"
-        assert "Successfully parsed" in upload_data["message"]
+        mock_page2 = MagicMock()
+        mock_page2.extract_text.return_value = (
+            "FAISS is a library for efficient similarity search and clustering of dense vectors."
+        )
 
-    # 4. Check vectorstore status
-    status_resp = client.get("/api/v1/vectorstore/status", headers=headers)
-    assert status_resp.status_code == 200
-    assert status_resp.json()["status"] == "ready"
-    assert status_resp.json()["has_local_index"] is True
+        with patch("app.services.pdf_processor.PdfReader") as mock_pdf_reader:
+            mock_reader_instance = MagicMock()
+            mock_reader_instance.pages = [mock_page1, mock_page2]
+            mock_pdf_reader.return_value = mock_reader_instance
 
-    # 5. Submit query to chatbot about the second page (FAISS library)
-    query_resp = client.post(
-        "/api/v1/chat/query",
-        json={"message": "What is FAISS?", "session_id": "e2e-session-id"},
-        headers=headers,
-    )
-    assert query_resp.status_code == 200
-    query_data = query_resp.json()
-    assert "answer" in query_data
-    assert query_data["session_id"] == "e2e-session-id"
+            # 3. Perform file upload
+            files = {"file": ("manual.pdf", b"%PDF-mock-bytes", "application/pdf")}
+            upload_resp = client.post(
+                "/api/v1/documents/upload", files=files, headers=headers
+            )
+            assert upload_resp.status_code == 201
+            upload_data = upload_resp.json()
+            assert upload_data["status"] == "completed"
+            assert "Successfully parsed" in upload_data["message"]
 
-    # 6. Verify citations contain the exact page matching the query
-    sources = query_data["sources"]
-    assert len(sources) > 0
+        # 4. Check vectorstore status
+        status_resp = client.get("/api/v1/vectorstore/status", headers=headers)
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] == "ready"
+        assert status_resp.json()["has_local_index"] is True
 
-    match_found = False
-    for source in sources:
-        if "FAISS is a library" in source["snippet"]:
-            assert source["document_name"] == "manual.pdf"
-            assert source["page"] == 2
-            assert source["score"] is not None
-            match_found = True
+        # 5. Submit query to chatbot about the second page (FAISS library)
+        query_resp = client.post(
+            "/api/v1/chat/query",
+            json={"message": "What is FAISS?", "session_id": "e2e-session-id"},
+            headers=headers,
+        )
+        assert query_resp.status_code == 200
+        query_data = query_resp.json()
+        assert "answer" in query_data
+        assert query_data["session_id"] == "e2e-session-id"
 
-    assert match_found, "Matching source page document was not found in citations"
+        # 6. Verify citations contain the exact page matching the query
+        sources = query_data["sources"]
+        assert len(sources) > 0
+
+        match_found = False
+        for source in sources:
+            if "FAISS is a library" in source["snippet"]:
+                assert source["document_name"] == "manual.pdf"
+                assert source["page"] == 2
+                assert source["score"] is not None
+                match_found = True
+
+        assert match_found, "Matching source page document was not found in citations"

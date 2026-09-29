@@ -3,9 +3,10 @@ import pytest
 from langchain_core.documents import Document
 from app.services.pdf_processor import PDFProcessorService
 from app.services.rag_service import RAGService
+from app.services.errors import GenerationError
 from app.vectorstore.faiss_store import FAISSVectorStore
-from langchain_community.embeddings import FakeEmbeddings
-from langchain_community.chat_models import FakeListChatModel
+from langchain_core.embeddings import FakeEmbeddings
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 
 
@@ -65,75 +66,81 @@ def test_convert_chat_history_mixed_roles():
     assert isinstance(result[3], AIMessage)
 
 
-def test_rag_service_empty_store_returns_error_string():
-    """answer_query() returns a descriptive error when the store is uninitialised."""
+def test_rag_service_empty_store_raises_error():
+    """An uninitialised store must not produce an assistant answer."""
     embeddings = FakeEmbeddings(size=1536)
     store = FAISSVectorStore(embeddings=embeddings)
     llm = FakeListChatModel(responses=["ignored"])
 
     service = RAGService(vector_store=store, llm=llm)
-    answer, sources = service.answer_query("test question", [])
+    with pytest.raises(GenerationError, match="empty") as error:
+        service.answer_query("test question", [])
+    assert error.value.status_code == 409
 
-    assert "empty" in answer.lower() or "error" in answer.lower() or isinstance(answer, str)
-    assert sources == []
 
-
-def test_rag_service_invokes_lcel_chain():
+def test_rag_service_invokes_pipeline():
     """
-    answer_query() invokes the LCEL chain and returns answer + source docs.
-    The internal chain is mocked to avoid real LLM/FAISS calls.
+    answer_query() runs the full retrieve → rerank → generate pipeline
+    and returns answer + source docs.
     """
     embeddings = FakeEmbeddings(size=1536)
     store = FAISSVectorStore(embeddings=embeddings)
-    llm = FakeListChatModel(responses=["Mock LLM answer"])
-
-    service = RAGService(vector_store=store, llm=llm)
+    llm = MagicMock()
 
     source_doc = Document(
         page_content="Context text from page 3.",
         metadata={"source": "report.pdf", "page": 3},
     )
 
-    mock_chain = MagicMock()
-    mock_chain.invoke.return_value = {
-        "answer": "Mock LLM answer",
-        "context": [source_doc],
-    }
-    service._chain = mock_chain  # inject pre-built chain
+    # Mock LLM response
+    mock_response = MagicMock()
+    mock_response.content = "Mock LLM answer [Source 1]"
+    llm.invoke.return_value = mock_response
 
-    answer, sources = service.answer_query(
-        "What is RAG?",
-        [{"role": "user", "content": "previous question"}],
-    )
+    service = RAGService(vector_store=store, llm=llm)
 
-    # Verify chain was called with correct keys
-    call_kwargs = mock_chain.invoke.call_args[0][0]
-    assert call_kwargs["input"] == "What is RAG?"
-    assert len(call_kwargs["chat_history"]) == 1
-    assert isinstance(call_kwargs["chat_history"][0], HumanMessage)
+    # Mock the retrieval to return our test doc
+    with patch.object(store, "similarity_search", return_value=[(source_doc, 0.85)]):
+        with patch("app.services.rag_service.settings") as mock_settings:
+            mock_settings.RETRIEVAL_K = 4
+            mock_settings.CONTEXT_K = 4
+            mock_settings.RERANK_ENABLED = False
+            mock_settings.MIN_SIMILARITY = 0.3
+            mock_settings.RERANK_MIN_SCORE = 0.5
+            answer, sources = service.answer_query(
+                "What is RAG?",
+                [{"role": "user", "content": "previous question"}],
+            )
 
-    assert answer == "Mock LLM answer"
-    assert len(sources) == 1
+    assert "Mock LLM answer" in answer
+    assert len(sources) >= 1
     assert sources[0].metadata["page"] == 3
     assert sources[0].metadata["source"] == "report.pdf"
 
 
-def test_rag_service_chain_exception_returns_error():
-    """answer_query() returns a safe error string when the chain raises."""
+def test_rag_service_llm_exception_raises_error():
+    """Generation failure propagates instead of becoming a saved answer."""
     embeddings = FakeEmbeddings(size=1536)
     store = FAISSVectorStore(embeddings=embeddings)
-    llm = FakeListChatModel(responses=[])
+    llm = MagicMock()
+    llm.invoke.side_effect = RuntimeError("LLM timeout")
+
+    source_doc = Document(
+        page_content="Some content",
+        metadata={"source": "test.pdf", "page": 1},
+    )
 
     service = RAGService(vector_store=store, llm=llm)
-    mock_chain = MagicMock()
-    mock_chain.invoke.side_effect = RuntimeError("LLM timeout")
-    service._chain = mock_chain
-
-    answer, sources = service.answer_query("Any question", [])
-
-    assert isinstance(answer, str)
-    assert "error" in answer.lower()
-    assert sources == []
+    with patch.object(store, "similarity_search", return_value=[(source_doc, 0.9)]):
+        with patch("app.services.rag_service.settings") as mock_settings:
+            mock_settings.RETRIEVAL_K = 4
+            mock_settings.CONTEXT_K = 4
+            mock_settings.RERANK_ENABLED = False
+            mock_settings.MIN_SIMILARITY = 0.3
+            mock_settings.RERANK_MIN_SCORE = 0.5
+            with pytest.raises(GenerationError, match="timed out") as error:
+                service.answer_query("Any question", [])
+    assert error.value.status_code == 504
 
 
 def test_rag_service_mock_response():
@@ -146,10 +153,8 @@ def test_rag_service_mock_response():
     llm = FakeListChatModel(responses=["Hello, I am a test response"])
 
     service = RAGService(vector_store=store, llm=llm)
-    answer, sources = service.answer_query("test question", [])
-
-    assert isinstance(answer, str)
-    assert isinstance(sources, list)
+    with pytest.raises(GenerationError):
+        service.answer_query("test question", [])
 
 
 
@@ -269,7 +274,7 @@ def test_faiss_similarity_search_returns_results(fake_store):
 
     result = fake_store.similarity_search("fast search", k=2)
 
-    mock_vs.similarity_search_with_score.assert_called_once_with("fast search", k=2)
+    mock_vs.similarity_search_with_score.assert_called_once_with("fast search", k=2, filter=ANY)
     assert result == expected
 
 
@@ -349,11 +354,13 @@ def test_get_embeddings_huggingface(monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDINGS_PROVIDER", "huggingface")
 
     mock_embeddings = MagicMock()
-    with patch("langchain_community.embeddings.HuggingFaceEmbeddings", return_value=mock_embeddings) as mock_class:
+    with patch("langchain_huggingface.HuggingFaceEmbeddings", return_value=mock_embeddings) as mock_class:
         embeddings = get_embeddings()
         assert embeddings == mock_embeddings
         mock_class.assert_called_once_with(
             model_name=settings.EMBEDDING_MODEL_NAME,
+            model_kwargs={"device": settings.EMBEDDING_DEVICE},
+            encode_kwargs={"normalize_embeddings": True, "batch_size": settings.EMBEDDING_BATCH_SIZE},
         )
 
 
@@ -373,6 +380,8 @@ def test_get_llm_google(monkeypatch):
             google_api_key="test-google-key",
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=2,
         )
 
 
@@ -392,4 +401,6 @@ def test_get_llm_anthropic(monkeypatch):
             api_key="test-anthropic-key",
             model=settings.LLM_MODEL_NAME,
             temperature=settings.TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=1,
         )

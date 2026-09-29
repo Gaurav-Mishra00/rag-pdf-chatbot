@@ -254,7 +254,7 @@ def test_health_ready_503_when_faiss_missing(client, monkeypatch):
     original_exists = os.path.exists
 
     def _mock_exists(path):
-        if "index.faiss" in str(path):
+        if "index.faiss" in str(path) or "manifest.json" in str(path):
             return False
         return original_exists(path)
 

@@ -19,7 +19,7 @@ import anyio
 import pytest
 from unittest.mock import MagicMock, call, patch
 from langchain_core.documents import Document
-from langchain_community.embeddings import FakeEmbeddings
+from langchain_core.embeddings import FakeEmbeddings
 
 from app.core.config import settings
 from app.core.database import get_db_connection

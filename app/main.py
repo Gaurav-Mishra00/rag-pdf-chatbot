@@ -1,10 +1,14 @@
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 import anyio
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import get_db_connection, init_db
@@ -60,8 +64,8 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         description="A production-ready RAG chatbot backend API using LangChain & FAISS",
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=None,
+        redoc_url=None,
         lifespan=lifespan,
     )
 
@@ -83,8 +87,72 @@ def create_app() -> FastAPI:
             content={"detail": "An internal server error occurred. Please check logs."},
         )
 
+    # Security Headers Middleware
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", (
+            "default-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "frame-ancestors 'none'"
+        ))
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+        return response
+
     # Register endpoints router
     app.include_router(api_router, prefix="/api/v1")
+
+    def docs_response(page: HTMLResponse) -> HTMLResponse:
+        # Permit only this response's generated inline scripts. The main app keeps
+        # its stricter self-only policy; Swagger/ReDoc also need their CDN assets.
+        nonce = secrets.token_urlsafe(24)
+        html = page.body.decode("utf-8").replace("<script", f'<script nonce="{nonce}"')
+        return HTMLResponse(html, headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                f"script-src 'self' https://cdn.jsdelivr.net 'nonce-{nonce}'; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data:; worker-src 'self' blob:; "
+                "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+            ),
+        })
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_docs(request: Request):
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return docs_response(get_swagger_ui_html(
+            openapi_url=f"{root_path}{app.openapi_url}", title=f"{app.title} - Swagger UI",
+            swagger_favicon_url="data:,",
+            oauth2_redirect_url=f"{root_path}/docs/oauth2-redirect",
+        ))
+
+    @app.get("/docs/oauth2-redirect", include_in_schema=False)
+    async def swagger_redirect():
+        return docs_response(get_swagger_ui_oauth2_redirect_html())
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc_docs(request: Request):
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return docs_response(get_redoc_html(
+            openapi_url=f"{root_path}{app.openapi_url}", title=f"{app.title} - ReDoc",
+            redoc_favicon_url="data:,", with_google_fonts=False,
+        ))
+
+    # Static files serving
+    static_dir = Path(__file__).resolve().parent / "static"
+    os.makedirs(static_dir, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", response_class=FileResponse, tags=["UI"])
+    async def serve_index():
+        index_file = static_dir / "index.html"
+        if not index_file.exists():
+            index_file.write_text("<!DOCTYPE html><html><body>Placeholder</body></html>")
+        return FileResponse(index_file)
 
     # Simple healthcheck endpoint (liveness — always 200 if process is running)
     @app.get("/health", tags=["System"])
@@ -120,7 +188,8 @@ def create_app() -> FastAPI:
         # Check 2: FAISS index file present on disk
         import os as _os
         index_file = _os.path.join(settings.FAISS_INDEX_PATH, "index.faiss")
-        if _os.path.exists(index_file):
+        manifest_file = _os.path.join(settings.FAISS_INDEX_PATH, "manifest.json")
+        if _os.path.exists(manifest_file) or _os.path.exists(index_file):
             components["vector_store"] = "ok"
         else:
             components["vector_store"] = "not_initialized"

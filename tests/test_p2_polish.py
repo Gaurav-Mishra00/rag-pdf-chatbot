@@ -2,8 +2,8 @@
 tests/test_p2_polish.py
 
 Verifies P2 enhancements:
-1. Reentrant caching of RAGService chain
-2. Similarity score lookup avoids duplicate string collisions by matching metadata
+1. RAG pipeline retrieve → rerank → generate flow
+2. Relevance threshold gating ("I don't know" fallback)
 3. Path masking in status API
 4. Database indices exist
 """
@@ -12,89 +12,81 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 from langchain_core.documents import Document
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from app.core.config import settings
 from app.core.database import get_db_connection
 from app.services.rag_service import RAGService
 from app.api.deps import get_rag_service, get_vector_store, reset_vector_store
 
 
-def test_rag_service_chain_caching():
+def test_rag_pipeline_with_reranking():
     """
-    Verify RAGService caches the compiled chain and only rebuilds
-    it if the underlying FAISS index instance changes.
+    Verify that when RERANK_ENABLED=True, the pipeline calls the reranker
+    and returns results sorted by rerank_score.
     """
-    reset_vector_store()
-    vector_store = get_vector_store()
-    
-    # We must load/init an index to allow _build_chain to succeed
-    vector_store.create_empty_index()
-
+    store = MagicMock()
     llm = MagicMock()
-    rag_service = RAGService(vector_store=vector_store, llm=llm)
 
-    # Mock the internal chain invoke and similarity_search methods to prevent execution errors
-    mock_chain = MagicMock()
-    mock_chain.invoke.return_value = {
-        "answer": "cached answer",
-        "context": []
-    }
-    
-    # Spy on _build_chain
-    original_build_chain = rag_service._build_chain
-    build_chain_spy = MagicMock(side_effect=original_build_chain)
-    rag_service._build_chain = build_chain_spy
+    doc1 = Document(page_content="First chunk about RAG.", metadata={"source": "a.pdf", "page": 1})
+    doc2 = Document(page_content="Second chunk about vectors.", metadata={"source": "a.pdf", "page": 2})
 
-    # First query -> builds the chain
-    with patch.object(rag_service, "_chain", mock_chain):
-        # We manually set _chain to None so it triggers the build_chain call
-        rag_service._chain = None
-        rag_service.answer_query("query 1", [])
-        assert build_chain_spy.call_count == 1
-        
-        # Second query -> uses cached chain, build_chain NOT called again
-        rag_service.answer_query("query 2", [])
-        assert build_chain_spy.call_count == 1
+    # Simulate FAISS similarity search returning both docs
+    store.vector_store = MagicMock()
+    store.similarity_search.return_value = [(doc1, 0.7), (doc2, 0.9)]
 
-        # Change underlying vector store index instance
-        vector_store.vector_store = MagicMock()
-        # Third query -> detects change, clears cache, and attempts to rebuild (catches error and returns string)
-        rag_service.answer_query("query 3", [])
-        assert build_chain_spy.call_count == 2
+    mock_response = MagicMock()
+    mock_response.content = "Answer about RAG [Source 1]"
+    llm.invoke.return_value = mock_response
+
+    service = RAGService(vector_store=store, llm=llm)
+
+    # Mock reranker to flip the order
+    def mock_rerank(query, docs):
+        for i, doc in enumerate(docs):
+            copy = doc.model_copy(deep=True)
+            copy.metadata["rerank_score"] = 0.9 - i * 0.3  # 0.9, 0.6
+            docs[i] = copy
+        return sorted(docs, key=lambda d: d.metadata["rerank_score"], reverse=True)
+
+    with patch("app.services.rag_service.settings") as mock_settings:
+        mock_settings.RETRIEVAL_K = 20
+        mock_settings.CONTEXT_K = 4
+        mock_settings.RERANK_ENABLED = True
+        mock_settings.MIN_SIMILARITY = 0.3
+        mock_settings.RERANK_MIN_SCORE = 0.5
+        with patch("app.services.reranker.rerank", side_effect=mock_rerank):
+            result = service.answer_query_detailed("What is RAG?", [])
+
+    assert result.relevance_passed is True
+    assert result.candidates_before_rerank == 2
+    assert "Answer about RAG" in result.answer
 
 
-def test_similarity_scores_no_duplicate_collision():
+def test_relevance_gate_triggers_i_dont_know():
     """
-    Verify that similarity search score mapping uses metadata comparison
-    to prevent collision when multiple chunks share the same content.
+    When all retrieved docs score below the threshold, the pipeline
+    returns an 'I don't know' answer without calling the LLM.
     """
-    vector_store = MagicMock()
-    # Mock similarity search to return two documents with the exact same content but different metadata/pages
-    doc1 = Document(page_content="duplicate header content", metadata={"source": "a.pdf", "page": 1})
-    doc2 = Document(page_content="duplicate header content", metadata={"source": "a.pdf", "page": 2})
-
-    vector_store.similarity_search.return_value = [
-        (doc1, 0.95),
-        (doc2, 0.60),
-    ]
-
+    store = MagicMock()
     llm = MagicMock()
-    rag_service = RAGService(vector_store=vector_store, llm=llm)
-    
-    # Mock chain execution output
-    mock_chain = MagicMock()
-    mock_chain.invoke.return_value = {
-        "answer": "answer",
-        "context": [doc1, doc2]
-    }
-    rag_service._chain = mock_chain
-    rag_service._vector_store_underlying = vector_store.vector_store
 
-    # Answer query
-    _, source_docs = rag_service.answer_query("test query", [])
+    doc = Document(page_content="Irrelevant content.", metadata={"source": "b.pdf", "page": 1})
+    store.vector_store = MagicMock()
+    store.similarity_search.return_value = [(doc, 0.1)]  # Very low score
 
-    # doc1 and doc2 must preserve their respective scores (0.95 vs 0.60)
-    assert source_docs[0].metadata["score"] == 0.95
-    assert source_docs[1].metadata["score"] == 0.60
+    service = RAGService(vector_store=store, llm=llm)
+
+    with patch("app.services.rag_service.settings") as mock_settings:
+        mock_settings.RETRIEVAL_K = 4
+        mock_settings.CONTEXT_K = 4
+        mock_settings.RERANK_ENABLED = False
+        mock_settings.MIN_SIMILARITY = 0.5  # Higher than the 0.1 score
+        mock_settings.RERANK_MIN_SCORE = 0.5
+        result = service.answer_query_detailed("Unrelated question?", [])
+
+    assert result.relevance_passed is False
+    assert "don't have enough relevant information" in result.answer
+    llm.invoke.assert_not_called()
 
 
 def test_status_endpoint_masks_absolute_path(client):

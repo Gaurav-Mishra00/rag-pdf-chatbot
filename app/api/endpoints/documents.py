@@ -4,7 +4,7 @@ import uuid
 from typing import List, Optional, Tuple
 
 import anyio
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
 
 from app.api.deps import get_pdf_processor, get_vector_store
 from app.core.config import settings
@@ -120,8 +120,8 @@ def _db_get_document_by_id(document_id: str, user_id: str) -> Optional[dict]:
     status_code=status.HTTP_200_OK,
 )
 async def list_documents(
-    limit: int = 10,
-    offset: int = 0,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     user_id: str = Depends(verify_api_key),
 ) -> List[DocumentStatusResponse]:
     """
@@ -172,7 +172,7 @@ async def upload_document(
     Supports transactional rollback/cleanup on failure.
     Isolated per caller.
     """
-    if not file.filename.endswith(".pdf"):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported.",
@@ -199,7 +199,7 @@ async def upload_document(
     # 1a. Enforce file size limit
     if len(content) > _MAX_UPLOAD_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File exceeds maximum allowed size of 50 MB.",
         )
 
@@ -260,7 +260,13 @@ async def upload_document(
             detail=f"Failed to store metadata in database: {str(e)}",
         )
 
-    # 7. Add chunks to the FAISS index
+    # 7. Decorate chunk documents with user_id and document metadata before adding to FAISS
+    for i, doc in enumerate(documents):
+        doc.metadata["user_id"] = user_id
+        doc.metadata["document_id"] = document_id
+        doc.metadata["chunk_id"] = chunk_ids[i]
+
+    # 8. Add chunks to the FAISS index
     try:
         vector_store.add_documents(documents, ids=chunk_ids)
     except Exception as e:

@@ -16,17 +16,17 @@ router = APIRouter()
     "/search",
     response_model=List[SearchResultDocument],
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key)],
 )
 async def search_vectorstore(
     payload: SearchQuerySchema,
     vector_store: FAISSVectorStore = Depends(get_vector_store),
+    user_id: str = Depends(verify_api_key),
 ) -> List[SearchResultDocument]:
     """
     Directly queries the FAISS index to retrieve the most similar text chunks.
     Useful for debugging embedding retrieval quality without calling the LLM.
     """
-    results = vector_store.similarity_search(payload.query, k=payload.top_k)
+    results = vector_store.similarity_search(payload.query, k=payload.top_k, user_id=user_id)
     return [
         SearchResultDocument(
             page_content=doc.page_content,

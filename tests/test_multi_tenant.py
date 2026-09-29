@@ -146,3 +146,95 @@ def test_chat_session_isolation(client):
     messages_b = history_resp_b2.json()["messages"]
     assert any("User B" in m["content"] for m in messages_b)
     assert not any("5566" in m["content"] for m in messages_b)
+
+
+def test_vector_retrieval_isolation(client):
+    """
+    Verify that User A's uploaded document chunks cannot be retrieved by User B's search/queries.
+    """
+    headers_a = {"X-API-Key": "user_a_secret_key"}
+    headers_b = {"X-API-Key": "user_b_secret_key"}
+
+    # 1. User A uploads a document with highly specific content
+    mock_page = MagicMock()
+    mock_page.extract_text.return_value = "The secret password for User A is AppleBananaOrange123."
+    
+    with patch("app.services.pdf_processor.PdfReader") as mock_pdf_reader:
+        mock_pdf_reader.return_value.pages = [mock_page]
+        files = {"file": ("user_a_secret.pdf", b"%PDF-mock-bytes", "application/pdf")}
+        upload_resp = client.post("/api/v1/documents/upload", files=files, headers=headers_a)
+        assert upload_resp.status_code == 201
+        doc_id = upload_resp.json()["document_id"]
+
+    try:
+        # 2. User B queries the vector store directly with User A's secret keyword
+        search_resp_b = client.post(
+            "/api/v1/vectorstore/search",
+            json={"query": "AppleBananaOrange123", "top_k": 4},
+            headers=headers_b,
+        )
+        assert search_resp_b.status_code == 200
+        results_b = search_resp_b.json()
+        # User B must NOT retrieve User A's document chunks
+        assert not any("AppleBananaOrange123" in r.get("page_content", "") for r in results_b)
+
+        # 3. User A queries the vector store — SHOULD retrieve User A's document chunks
+        search_resp_a = client.post(
+            "/api/v1/vectorstore/search",
+            json={"query": "AppleBananaOrange123", "top_k": 4},
+            headers=headers_a,
+        )
+        assert search_resp_a.status_code == 200
+        results_a = search_resp_a.json()
+        assert any("AppleBananaOrange123" in r.get("page_content", "") for r in results_a)
+
+    finally:
+        # Cleanup User A's document
+        client.delete(f"/api/v1/documents/{doc_id}", headers=headers_a)
+
+
+def test_rate_limiting_identity(client):
+    """
+    Verify that two different API keys receive independent rate limit buckets,
+    even if sent from the same client environment/IP.
+    """
+    from app.core.rate_limiter import chat_limiter
+    chat_limiter.clear()
+    
+    headers_a = {"X-API-Key": "user_a_secret_key"}
+    headers_b = {"X-API-Key": "user_b_secret_key"}
+
+    from app.core.config import settings
+    original_env = settings.APP_ENV
+    settings.APP_ENV = "production"
+    try:
+        from app.services.rag_service import RAGResult
+        with patch("app.services.rag_service.RAGService.answer_query_detailed", return_value=RAGResult(answer="ans", relevance_passed=True)):
+            # 1. User A exhausts their limit (30 requests)
+            for _ in range(30):
+                resp = client.post(
+                    "/api/v1/chat/query",
+                    json={"message": "hello User A"},
+                    headers=headers_a,
+                )
+                assert resp.status_code == 200
+
+            # User A's 31st request is blocked
+            blocked_a = client.post(
+                "/api/v1/chat/query",
+                json={"message": "blocked User A"},
+                headers=headers_a,
+            )
+            assert blocked_a.status_code == 429
+
+            # 2. User B tries to query — should succeed because they have a separate bucket
+            resp_b = client.post(
+                "/api/v1/chat/query",
+                json={"message": "hello User B"},
+                headers=headers_b,
+            )
+            assert resp_b.status_code == 200
+    finally:
+        settings.APP_ENV = original_env
+
+    chat_limiter.clear()

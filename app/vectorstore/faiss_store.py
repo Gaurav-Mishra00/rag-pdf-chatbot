@@ -2,14 +2,16 @@ import logging
 import os
 import threading
 import uuid
+import json
 from typing import List, Optional, Tuple
 
 import faiss as faiss_lib  # for runtime index type assertion
-from langchain_community.vectorstores import FAISS
+from app.vectorstore.native_faiss import FAISS, IndexCompatibilityError
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from app.core.config import settings
+from app.core.security import current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +30,15 @@ _faiss_write_lock = threading.RLock()
 
 class FAISSVectorStore:
     """
-    A production wrapper around LangChain's FAISS vector store.
+    A robust wrapper around the application's native FAISS vector store.
     Handles indexing, persistence, deletion, and similarity search.
 
     Thread-safety: write operations (add, delete, create) acquire a
-    module-level threading.Lock. This is sufficient for single-process
-    deployments only. See _faiss_write_lock docstring above.
+    process-level reentrant lock (_faiss_write_lock).
 
-    FAISS deletion: LangChain's FAISS wrapper stores vectors under an
-    IndexFlatL2 (or similar flat index) which supports remove_ids(). The
-    .delete() call is confirmed to work and the result is persisted to disk
-    via save_local() inside the same lock scope.  A server restart will
-    therefore load the post-deletion index — deleted docs will NOT resurface.
+    FAISS deletion: The native FAISS wrapper manages vectors under IndexFlatIP
+    with unit-normalized embeddings, supporting remove_ids(). The .delete()
+    call persists changes to disk via save_local() inside the lock scope.
     """
 
     def __init__(self, embeddings: Embeddings):
@@ -56,9 +55,11 @@ class FAISSVectorStore:
         Returns True if the index was found and loaded, False otherwise.
         """
         index_path = settings.FAISS_INDEX_PATH
-        index_file = os.path.join(index_path, "index.faiss")
+        index_file = os.path.join(index_path, "manifest.json")
 
         if not os.path.exists(index_file):
+            if os.path.exists(os.path.join(index_path, "index.faiss")):
+                raise IndexCompatibilityError("Legacy index requires reindexing. Run python -m scripts.reindex.")
             logger.info("No existing FAISS index found at '%s'.", index_path)
             return False
 
@@ -66,7 +67,6 @@ class FAISSVectorStore:
             self.vector_store = FAISS.load_local(
                 index_path,
                 self.embeddings,
-                allow_dangerous_deserialization=True,
             )
             logger.info(
                 "FAISS index loaded from '%s' (%d vectors).",
@@ -76,7 +76,7 @@ class FAISSVectorStore:
             return True
         except Exception as exc:
             logger.error("Failed to load FAISS index: %s", exc, exc_info=True)
-            return False
+            raise
 
     def save_index(self) -> None:
         """
@@ -211,25 +211,42 @@ class FAISSVectorStore:
     # ------------------------------------------------------------------
 
     def similarity_search(
-        self, query: str, k: int = 4
+        self, query: str, k: int = 4, user_id: Optional[str] = None
     ) -> List[Tuple[Document, float]]:
         """
         Performs a similarity search against the FAISS index.
+        Filters search results by user_id and excludes placeholder documents.
         Returns (Document, score) tuples; empty list when uninitialised.
         """
         if self.vector_store is None:
             logger.warning("similarity_search() called but index is not initialised.")
             return []
 
+        # Define metadata filter callable
+        def _metadata_filter(metadata: dict) -> bool:
+            # 1. Exclude bootstrap placeholders
+            if metadata.get("source") == "__init__":
+                return False
+            # 2. Filter by user_id if provided or resolved from context
+            uid = user_id or current_user_id.get()
+            if uid is not None:
+                return metadata.get("user_id") == uid
+            return True
+
         try:
-            results = self.vector_store.similarity_search_with_score(query, k=k)
+            uid = user_id if user_id is not None else current_user_id.get()
+            with _faiss_write_lock:
+                results = self.vector_store.similarity_search_with_score(
+                    query, k=k, filter=_metadata_filter
+                )
             logger.debug(
-                "similarity_search: query=%r, k=%d, hits=%d", query, k, len(results)
+                "similarity_search: query=%r, k=%d, user_id=%s, hits=%d",
+                query, k, uid, len(results)
             )
             return results
         except Exception as exc:
             logger.error("FAISS similarity search failed: %s", exc, exc_info=True)
-            return []
+            raise
 
     # ------------------------------------------------------------------
     # Diagnostics
@@ -250,8 +267,10 @@ class FAISSVectorStore:
         Returns 0 if the file does not exist (i.e. index has never been saved).
         """
         with _faiss_write_lock:
-            index_file = os.path.join(settings.FAISS_INDEX_PATH, "index.faiss")
             try:
+                with open(os.path.join(settings.FAISS_INDEX_PATH, "manifest.json"), encoding="utf-8") as stream:
+                    snapshot = json.load(stream)["vector_file"]
+                index_file = os.path.join(settings.FAISS_INDEX_PATH, snapshot)
                 return os.path.getsize(index_file)
-            except OSError:
+            except (OSError, ValueError, KeyError):
                 return 0
