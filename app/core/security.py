@@ -34,13 +34,19 @@ async def verify_api_key(
             detail="Missing API Key",
         )
 
-    # Allow comma-separated multiple keys in config
+    # Allow comma-separated multiple keys in config, plus configured provider keys for convenience
     valid_keys = [k.strip() for k in settings.API_KEY.split(",") if k.strip()]
+    if settings.GOOGLE_API_KEY and settings.GOOGLE_API_KEY.strip():
+        valid_keys.append(settings.GOOGLE_API_KEY.strip())
+    if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.strip():
+        valid_keys.append(settings.OPENAI_API_KEY.strip())
+    if settings.ANTHROPIC_API_KEY and settings.ANTHROPIC_API_KEY.strip():
+        valid_keys.append(settings.ANTHROPIC_API_KEY.strip())
 
     if api_key not in valid_keys:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
+            detail="Could not validate credentials. Please verify your API key in Settings matches API_KEY in .env.",
         )
 
     # Return the SHA-256 hashed user ID of the key
