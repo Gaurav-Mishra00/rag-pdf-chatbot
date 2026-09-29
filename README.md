@@ -98,10 +98,15 @@ uvicorn app.main:app --reload
 
 ## Running Tests
 
-Execute the full automated test suite:
+Execute the full automated test suite (ensure `.venv` is activated, or use its direct path):
 
 ```bash
+# With activated virtual environment (.venv)
 pytest
+
+# Or directly without activating:
+.\.venv\Scripts\pytest        # On Windows
+# .venv/bin/pytest            # On Linux/macOS
 ```
 
 ---
