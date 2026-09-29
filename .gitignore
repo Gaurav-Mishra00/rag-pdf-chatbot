@@ -50,3 +50,6 @@ data/*
 local_faiss_index/
 *.faiss
 *.pkl
+
+# Private Local Preparation Notes
+docs/interview-technical-walkthrough.md
