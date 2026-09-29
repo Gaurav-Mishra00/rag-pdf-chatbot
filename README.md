@@ -46,7 +46,7 @@ rag-pdf-chatbot/
 ├── data/                  # SQLite database, uploaded PDFs, and FAISS index files
 ├── docs/                  # In-depth architectural, technical, and troubleshooting documentation
 ├── scripts/               # Utility scripts (e.g., reindexing script)
-├── tests/                 # Comprehensive automated pytest test suite (102 tests)
+├── tests/                 # Comprehensive automated pytest test suite (110 tests)
 ├── .env.example           # Environment variable template
 ├── Dockerfile             # Multi-stage production container build
 ├── requirements.txt       # Python dependencies
@@ -109,6 +109,61 @@ pytest
 # Or directly without activating:
 .\.venv\Scripts\pytest        # On Windows
 # .venv/bin/pytest            # On Linux/macOS
+```
+
+All **110 tests** validate retrieval, reranking, multi-tenancy, rate limiting, persistence, security headers, CORS, streaming, and error handling.
+
+---
+
+## Production Deployment
+
+### Option 1: Docker Compose (Recommended)
+
+1. Configure your production environment variables in `.env` (copy from `.env.example`):
+   ```bash
+   cp .env.example .env
+   ```
+   Set strong values for:
+   - `API_KEY`: A strong secret key.
+   - `ALLOWED_ORIGINS`: Comma-separated allowed domains (e.g. `https://yourdomain.com`).
+   - `GOOGLE_API_KEY` (or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`).
+   - `APP_ENV=production`
+
+2. Launch the containerized service:
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. View running logs:
+   ```bash
+   docker compose logs -f
+   ```
+
+The container automatically runs as an unprivileged user (`appuser`), checks container health at `/health`, and persists database assets and uploads in `./data`.
+
+### Option 2: Standalone Docker
+
+```bash
+docker build -t rag-pdf-chatbot:latest .
+docker run -d \
+  --name rag-pdf-chatbot \
+  --restart unless-stopped \
+  -p 8000:8000 \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  rag-pdf-chatbot:latest
+```
+
+### Option 3: Production ASGI Server
+
+Run Uvicorn with production settings behind a reverse proxy (Nginx, Caddy, or Traefik) providing SSL/TLS termination:
+
+```bash
+python -m uvicorn app.main:app \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --proxy-headers \
+  --forwarded-allow-ips "*"
 ```
 
 ---

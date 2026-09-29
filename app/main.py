@@ -70,10 +70,19 @@ def create_app() -> FastAPI:
     )
 
     # Setup CORS middleware
+    raw_origins = getattr(settings, "ALLOWED_ORIGINS", "*")
+    origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not origins or "*" in origins:
+        allow_origins = ["*"]
+        allow_credentials = False
+    else:
+        allow_origins = origins
+        allow_credentials = True
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Adjust for production
-        allow_credentials=False,
+        allow_origins=allow_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -99,8 +108,11 @@ def create_app() -> FastAPI:
             "frame-ancestors 'none'"
         ))
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+        if settings.APP_ENV == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
     # Register endpoints router

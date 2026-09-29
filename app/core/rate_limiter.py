@@ -33,14 +33,23 @@ class RateLimiter:
         with self._lock:
             # Clean up old timestamps outside the sliding window
             window_start = now - self.period_seconds
-            self._history[key] = [t for t in self._history[key] if t > window_start]
+            valid_timestamps = [t for t in self._history.get(key, []) if t > window_start]
             
-            if len(self._history[key]) >= self.rate_limit_requests:
+            if len(valid_timestamps) >= self.rate_limit_requests:
+                self._history[key] = valid_timestamps
                 logger.warning("Rate limit hit for key %r: %d requests in %ds", 
-                               key, len(self._history[key]), self.period_seconds)
+                               key, len(valid_timestamps), self.period_seconds)
                 return True
             
-            self._history[key].append(now)
+            valid_timestamps.append(now)
+            self._history[key] = valid_timestamps
+
+            # Periodic prune if dictionary grows large (prevents unbounded memory leak)
+            if len(self._history) > 1000:
+                expired_keys = [k for k, v in self._history.items() if not v or v[-1] <= window_start]
+                for k in expired_keys:
+                    self._history.pop(k, None)
+
             return False
 
     def clear(self):

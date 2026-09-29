@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     # Security
     API_KEY: str = "change_me_in_production"
+    ALLOWED_ORIGINS: str = "*"
 
     # FAISS Path
     FAISS_INDEX_PATH: str = "data/faiss_index"

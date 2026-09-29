@@ -55,7 +55,7 @@ rag-pdf-chatbot/
 │   └── technical-build-guide.md # Step-by-step technical implementation guide
 ├── scripts/                     # Standalone operational tools
 │   └── reindex.py               # CLI tool to rebuild FAISS index from disk PDFs & SQLite metadata
-├── tests/                       # Automated test suite (105 pytest tests)
+├── tests/                       # Automated test suite (110 pytest tests)
 │   ├── conftest.py              # Global fixtures, mock providers, and isolated test databases
 │   ├── test_api.py              # Basic endpoint smoke and routing tests
 │   ├── test_arch_problems.py    # Architectural regression tests (WAL mode, locks, deletion)
@@ -68,6 +68,7 @@ rag-pdf-chatbot/
 │   ├── test_operational.py      # Rate limiting, payload limits, backups, and secret files
 │   ├── test_p2_polish.py        # Reranker, relevance gating, and path masking tests
 │   ├── test_reconciliation.py   # Self-healing storage reconciliation tests
+│   ├── test_security_hardening.py # CORS, HSTS, timing safety, and upload traversal tests
 │   └── test_services.py         # Unit tests for PDF processor, FAISS store, & RAG service
 ├── .env.example                 # Reference environment variables
 ├── Dockerfile                   # Two-stage production container build

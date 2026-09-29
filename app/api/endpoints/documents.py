@@ -173,18 +173,23 @@ async def upload_document(
     Supports transactional rollback/cleanup on failure.
     Isolated per caller.
     """
-    if not file.filename.lower().endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported.",
         )
 
+    # Sanitize filename against directory traversal or path injection
+    filename = os.path.basename(file.filename.replace("\\", "/"))
+    if not filename or filename.strip() in (".pdf", ""):
+        filename = f"upload_{uuid.uuid4().hex[:8]}.pdf"
+
     # Prevent duplicates by filename per owner
-    exists = await anyio.to_thread.run_sync(_db_check_document_exists, file.filename, user_id)
+    exists = await anyio.to_thread.run_sync(_db_check_document_exists, filename, user_id)
     if exists:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Document with filename '{file.filename}' already exists.",
+            detail=f"Document with filename '{filename}' already exists.",
         )
 
     # 1. Read uploaded file bytes
@@ -226,7 +231,7 @@ async def upload_document(
         )
 
     # 4. Extract and chunk text from the PDF
-    documents = pdf_processor.process_pdf(content, filename=file.filename)
+    documents = pdf_processor.process_pdf(content, filename=filename)
     if not documents:
         # Cleanup file if parsing failed or PDF is empty
         if os.path.exists(file_path):
@@ -244,7 +249,7 @@ async def upload_document(
         await anyio.to_thread.run_sync(
             _db_insert_document,
             document_id,
-            file.filename,
+            filename,
             file_path,
             len(content),
             len(documents),
@@ -284,7 +289,7 @@ async def upload_document(
     query_cache.clear_for_user(user_id)
 
     return DocumentUploadResponse(
-        filename=file.filename,
+        filename=filename,
         status=IngestionStatus.COMPLETED,
         message=f"Successfully parsed, stored, and indexed {len(documents)} chunks.",
         document_id=document_id,

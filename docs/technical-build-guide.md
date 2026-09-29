@@ -296,10 +296,10 @@ Run the automated test suite to verify all architectural requirements:
 pytest
 ```
 
-All **105 tests** validate:
+All **110 tests** validate:
 - Persistent chat history across server reloads.
 - Concurrency write locking in FAISS.
-- PDF upload validation (magic bytes, size limits).
+- PDF upload validation (magic bytes, size limits, filename sanitization).
 - Document deletion and vector chunk removal.
 - Provider error mapping (502, 503, 504) and non-persistence of failed turns.
 - Multi-tenant privacy boundaries and rate limiting.
@@ -310,3 +310,4 @@ All **105 tests** validate:
 - SHA-256 chunk hash deduplication and HNSW index loading.
 - Server-Sent Events (SSE) token streaming.
 - Polymorphic LLM content block normalization (`_extract_text_content`).
+- Timing-safe API key verification, HSTS enforcement, and bounded rate limiter memory pruning.

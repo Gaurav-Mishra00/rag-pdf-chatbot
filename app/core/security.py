@@ -1,5 +1,6 @@
 import contextvars
 import hashlib
+import secrets
 from fastapi import Security, HTTPException, status, Request
 from fastapi.security.api_key import APIKeyHeader
 from app.core.config import settings
@@ -43,7 +44,7 @@ async def verify_api_key(
     if settings.ANTHROPIC_API_KEY and settings.ANTHROPIC_API_KEY.strip():
         valid_keys.append(settings.ANTHROPIC_API_KEY.strip())
 
-    if api_key not in valid_keys:
+    if not any(secrets.compare_digest(api_key, vk) for vk in valid_keys):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials. Please verify your API key in Settings matches API_KEY in .env.",
