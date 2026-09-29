@@ -20,6 +20,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage, SystemMessage
 
 from app.core.config import settings
+from app.core.cache import query_cache
 from app.vectorstore.faiss_store import FAISSVectorStore
 from app.prompts.templates import CONTEXTUALIZE_SYSTEM_PROMPT, QA_SYSTEM_PROMPT_CITED
 from app.services.errors import GenerationError, generation_error
@@ -216,8 +217,24 @@ class RAGService:
         return filtered[: settings.CONTEXT_K], True
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Step 5: Generate
     # ------------------------------------------------------------------
+
+    def _build_qa_messages(
+        self,
+        query: str,
+        context_docs: List[Document],
+        chat_history: List[BaseMessage],
+    ) -> List[BaseMessage]:
+        """Constructs prompt message list with formatted context blocks."""
+        context_block = _build_context_block(context_docs)
+        system_prompt = QA_SYSTEM_PROMPT_CITED.format(context=context_block)
+        return [
+            SystemMessage(content=system_prompt),
+            *chat_history,
+            HumanMessage(content=query),
+        ]
 
     def _generate(
         self,
@@ -226,14 +243,7 @@ class RAGService:
         chat_history: List[BaseMessage],
     ) -> str:
         """Calls the LLM to generate an answer with inline citations."""
-        context_block = _build_context_block(context_docs)
-        system_prompt = QA_SYSTEM_PROMPT_CITED.format(context=context_block)
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            *chat_history,
-            HumanMessage(content=query),
-        ]
+        messages = self._build_qa_messages(query, context_docs, chat_history)
 
         try:
             response = self.llm.invoke(messages)
@@ -271,6 +281,7 @@ class RAGService:
         self,
         query: str,
         chat_history: List[Dict[str, str]],
+        user_id: str = "",
     ) -> RAGResult:
         """
         Executes the full RAG pipeline with timing and diagnostic metadata.
@@ -278,6 +289,13 @@ class RAGService:
         Returns a ``RAGResult`` with the answer, citations, source docs,
         timing breakdowns, and relevance gate status.
         """
+        # 0. Check Query Cache for identical recent queries without history
+        if user_id and not chat_history:
+            cached_result = query_cache.get(user_id, query)
+            if cached_result is not None:
+                logger.info("Query cache hit for user=%s query=%r", user_id[:8], query)
+                return cached_result
+
         t_start = time.perf_counter()
 
         lc_history = _convert_chat_history(chat_history)
@@ -302,11 +320,17 @@ class RAGService:
             candidates.append(doc)
         candidates_before_rerank = len(candidates)
 
-        # 3. Rerank
+        # 3. Adaptive Reranking
         t_rerank = time.perf_counter()
         reranked = settings.RERANK_ENABLED and len(candidates) > 0
         if reranked:
-            candidates = self._rerank(standalone_query, candidates)
+            top_sim = candidates[0].metadata.get("similarity_score", 0.0) if candidates else 0.0
+            adaptive_thresh = getattr(settings, "ADAPTIVE_RERANK_THRESHOLD", 0.88)
+            if isinstance(adaptive_thresh, (int, float)) and top_sim >= adaptive_thresh:
+                # Highly confident top candidate: rerank only the top 3 candidates to save CPU
+                candidates = self._rerank(standalone_query, candidates[:3]) + candidates[3:]
+            else:
+                candidates = self._rerank(standalone_query, candidates)
         rerank_time_ms = (time.perf_counter() - t_rerank) * 1000
 
         # 4. Relevance gate
@@ -356,7 +380,7 @@ class RAGService:
             generation_time_ms, total_time_ms,
         )
 
-        return RAGResult(
+        result = RAGResult(
             answer=answer,
             citations=citations,
             source_docs=filtered_docs,
@@ -368,3 +392,117 @@ class RAGService:
             candidates_after_rerank=candidates_after_rerank,
             relevance_passed=relevance_passed,
         )
+
+        # Store in query cache if enabled
+        if user_id and not chat_history and relevance_passed:
+            query_cache.set(user_id, query, result)
+
+        return result
+
+    def answer_query_stream(
+        self,
+        query: str,
+        chat_history: List[Dict[str, str]],
+        user_id: str = "",
+    ):
+        """
+        Executes the RAG pipeline yielding events for streaming:
+        - {"type": "citations", "citations": [...]}
+        - {"type": "token", "token": "..."}
+        - {"type": "done", "result": RAGResult}
+        """
+        t_start = time.perf_counter()
+        lc_history = _convert_chat_history(chat_history)
+
+        standalone_query = self._contextualize_query(query, lc_history)
+
+        t_retrieve = time.perf_counter()
+        try:
+            search_results = self._retrieve(standalone_query)
+        except RuntimeError as exc:
+            logger.warning("answer_query_stream: %s", exc)
+            raise GenerationError(str(exc), status_code=409) from exc
+
+        retrieval_time_ms = (time.perf_counter() - t_retrieve) * 1000
+
+        candidates = []
+        for doc, score in search_results:
+            doc.metadata["similarity_score"] = float(score)
+            candidates.append(doc)
+        candidates_before_rerank = len(candidates)
+
+        t_rerank = time.perf_counter()
+        reranked = settings.RERANK_ENABLED and len(candidates) > 0
+        if reranked:
+            top_sim = candidates[0].metadata.get("similarity_score", 0.0) if candidates else 0.0
+            adaptive_thresh = getattr(settings, "ADAPTIVE_RERANK_THRESHOLD", 0.88)
+            if isinstance(adaptive_thresh, (int, float)) and top_sim >= adaptive_thresh:
+                candidates = self._rerank(standalone_query, candidates[:3]) + candidates[3:]
+            else:
+                candidates = self._rerank(standalone_query, candidates)
+        rerank_time_ms = (time.perf_counter() - t_rerank) * 1000
+
+        filtered_docs, relevance_passed = self._apply_relevance_gate(
+            candidates, reranked=reranked
+        )
+        candidates_after_rerank = len(filtered_docs)
+
+        citations = []
+        for doc in filtered_docs:
+            citations.append(Citation(
+                document_name=doc.metadata.get("source", "unknown"),
+                page=doc.metadata.get("page"),
+                section=doc.metadata.get("section", ""),
+                snippet=doc.page_content[:300],
+                similarity_score=doc.metadata.get("similarity_score", 0.0),
+                rerank_score=doc.metadata.get("rerank_score"),
+                chunk_id=doc.metadata.get("chunk_id"),
+            ))
+
+        # Yield citations first so UI can display sources immediately
+        yield {
+            "type": "citations",
+            "citations": [c.__dict__ for c in citations],
+            "relevance_passed": relevance_passed,
+        }
+
+        t_gen = time.perf_counter()
+        full_answer = ""
+
+        if not relevance_passed:
+            fallback = (
+                "I don't have enough relevant information in the uploaded documents "
+                "to answer this question. Please try rephrasing your question, or "
+                "upload additional documents that may contain the answer."
+            )
+            full_answer = fallback
+            yield {"type": "token", "token": fallback}
+        else:
+            messages = self._build_qa_messages(standalone_query, filtered_docs, lc_history)
+            try:
+                for chunk in self.llm.stream(messages):
+                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if token:
+                        full_answer += token
+                        yield {"type": "token", "token": token}
+            except Exception as exc:
+                logger.error("LLM streaming failed: %s", exc, exc_info=True)
+                raise generation_error(exc) from exc
+
+        generation_time_ms = (time.perf_counter() - t_gen) * 1000
+        total_time_ms = (time.perf_counter() - t_start) * 1000
+
+        result = RAGResult(
+            answer=full_answer,
+            citations=citations,
+            source_docs=filtered_docs,
+            retrieval_time_ms=retrieval_time_ms,
+            rerank_time_ms=rerank_time_ms,
+            generation_time_ms=generation_time_ms,
+            total_time_ms=total_time_ms,
+            candidates_before_rerank=candidates_before_rerank,
+            candidates_after_rerank=candidates_after_rerank,
+            relevance_passed=relevance_passed,
+        )
+
+        yield {"type": "done", "result": result}

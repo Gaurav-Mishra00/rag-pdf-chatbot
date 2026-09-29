@@ -69,7 +69,13 @@ class FAISS(VectorStore):
         if not documents:
             raise ValueError("At least one document is required to determine vector dimension")
         vectors = cls._vectors(embedding.embed_documents([doc.page_content for doc in documents]))
-        instance = cls(embedding, faiss.IndexFlatIP(vectors.shape[1]))
+        from app.core.config import settings
+        if getattr(settings, "FAISS_INDEX_TYPE", "flat") == "hnsw":
+            raw_index = faiss.IndexHNSWFlat(vectors.shape[1], settings.FAISS_HNSW_M, faiss.METRIC_INNER_PRODUCT)
+            raw_index.hnsw.efSearch = settings.FAISS_HNSW_EF_SEARCH
+        else:
+            raw_index = faiss.IndexFlatIP(vectors.shape[1])
+        instance = cls(embedding, raw_index)
         instance._add(documents, ids, vectors)
         return instance
 
@@ -169,7 +175,13 @@ class FAISS(VectorStore):
         vector_path = folder / name
         if hashlib.sha256(vector_path.read_bytes()).hexdigest() != data["vector_sha256"]:
             raise ValueError("Vector snapshot checksum mismatch; restore a backup")
-        index = faiss.read_index(str(vector_path))
+        from app.core.config import settings
+        if getattr(settings, "FAISS_MMAP_ENABLED", False):
+            index = faiss.read_index(str(vector_path), faiss.IO_FLAG_MMAP)
+        else:
+            index = faiss.read_index(str(vector_path))
+        if hasattr(index, "hnsw"):
+            index.hnsw.efSearch = getattr(settings, "FAISS_HNSW_EF_SEARCH", 64)
         rows = data["documents"]
         if index.d != data["dimension"] or index.ntotal != len(rows) or index.metric_type != faiss.METRIC_INNER_PRODUCT:
             raise ValueError("Vector snapshot and document manifest disagree")

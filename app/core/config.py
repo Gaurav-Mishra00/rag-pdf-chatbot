@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     RERANK_ENABLED: bool = True
     RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
     RERANK_MIN_SCORE: float = Field(default=0.5, ge=0, le=1)
+    ADAPTIVE_RERANK_THRESHOLD: float = Field(default=0.88, ge=0, le=1)
+
+    # Efficiency & Performance Optimizations
+    QUERY_CACHE_ENABLED: bool = True
+    QUERY_CACHE_TTL_SECONDS: int = Field(default=3600, ge=1)
+    QUERY_CACHE_MAX_SIZE: int = Field(default=500, ge=10)
+    CHUNK_DEDUPLICATION_ENABLED: bool = True
+    FAISS_INDEX_TYPE: Literal["flat", "hnsw"] = "flat"
+    FAISS_HNSW_M: int = Field(default=32, ge=4, le=128)
+    FAISS_HNSW_EF_SEARCH: int = Field(default=64, ge=8, le=512)
+    FAISS_MMAP_ENABLED: bool = False
 
     # LLM Settings
     LLM_PROVIDER: Literal["openai", "google", "anthropic"] = "openai"

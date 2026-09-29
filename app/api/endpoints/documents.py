@@ -4,10 +4,11 @@ import uuid
 from typing import List, Optional, Tuple
 
 import anyio
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query, BackgroundTasks
 
 from app.api.deps import get_pdf_processor, get_vector_store
 from app.core.config import settings
+from app.core.cache import query_cache
 from app.core.database import get_db_connection
 from app.core.security import verify_api_key
 from app.schemas.document import DocumentUploadResponse, DocumentStatusResponse, IngestionStatus
@@ -279,6 +280,9 @@ async def upload_document(
             detail=f"Failed to add documents to FAISS index: {str(e)}",
         )
 
+    # Invalidate cached queries for this user since the document index has changed
+    query_cache.clear_for_user(user_id)
+
     return DocumentUploadResponse(
         filename=file.filename,
         status=IngestionStatus.COMPLETED,
@@ -357,6 +361,9 @@ async def delete_document(
                 f"Document ID '{document_id}' may need manual DB cleanup."
             ),
         )
+
+    # Invalidate query cache for this user
+    query_cache.clear_for_user(user_id)
 
     return {
         "message": "Document successfully deleted.",

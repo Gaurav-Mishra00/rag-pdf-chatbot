@@ -8,12 +8,14 @@ Upload PDF documents, ask questions, and receive grounded answers complete with 
 
 ## Features
 
-- **Document Processing**: Extracts text and per-page metadata from uploaded PDFs with smart chunking (1,000 characters, 200 overlap).
-- **Dense Vector Search**: Native FAISS index with inner-product cosine similarity and unit-normalized embeddings.
-- **Precision Reranking**: Cross-encoder reranking with sigmoid confidence scores and an "I don't know" threshold to filter hallucinations.
+- **Document Processing**: Extracts text and per-page metadata from uploaded PDFs with smart chunking (1,000 characters, 200 overlap) and SHA-256 chunk deduplication.
+- **Dense Vector Search**: Native FAISS index with inner-product cosine similarity, unit-normalized embeddings, optional HNSW graph indexing, and MMAP memory-mapped snapshot loading.
+- **Precision Reranking**: Cross-encoder reranking with sigmoid confidence scores, adaptive rerank gating to skip CPU load on clear matches, and an "I don't know" threshold to filter hallucinations.
+- **Server-Sent Events (SSE) Streaming**: Real-time token-by-token streaming at `/api/v1/chat/stream` with live citation previews in the Web UI.
+- **In-Memory Query Result Cache**: User-isolated LRU query cache with TTL expiration and automatic invalidation on document mutations.
 - **Persistent Storage**: SQLite database for chat history, sessions, document tracking, and chunk mappings.
 - **Security & Multi-Tenancy**: API key authentication with SHA-256 key hashing for per-user data isolation and token-bucket rate limiting.
-- **Clean Web UI & API**: Modern browser interface served directly from FastAPI, plus interactive Swagger UI at `/docs`.
+- **Clean Web UI & API**: Modern browser interface with live token streaming served directly from FastAPI, plus interactive Swagger UI at `/docs`.
 
 ---
 
@@ -44,7 +46,7 @@ rag-pdf-chatbot/
 ├── data/                  # SQLite database, uploaded PDFs, and FAISS index files
 ├── docs/                  # In-depth architectural, technical, and troubleshooting documentation
 ├── scripts/               # Utility scripts (e.g., reindexing script)
-├── tests/                 # Comprehensive automated pytest test suite (95 tests)
+├── tests/                 # Comprehensive automated pytest test suite (102 tests)
 ├── .env.example           # Environment variable template
 ├── Dockerfile             # Multi-stage production container build
 ├── requirements.txt       # Python dependencies

@@ -116,4 +116,18 @@ class PDFProcessorService:
                 "end_index": chunk.metadata["start_index"] + len(chunk.page_content),
                 "chunk_hash": hashlib.sha256(chunk.page_content.encode()).hexdigest(),
             })
-        return chunks
+
+        return self._filter_duplicate_chunks(chunks)
+
+    def _filter_duplicate_chunks(self, chunks: List[Document]) -> List[Document]:
+        from app.core.config import settings
+        if not getattr(settings, "CHUNK_DEDUPLICATION_ENABLED", True):
+            return chunks
+        seen_hashes = set()
+        deduped = []
+        for chunk in chunks:
+            chash = chunk.metadata.get("chunk_hash") or hashlib.sha256(chunk.page_content.encode()).hexdigest()
+            if chash not in seen_hashes:
+                seen_hashes.add(chash)
+                deduped.append(chunk)
+        return deduped
