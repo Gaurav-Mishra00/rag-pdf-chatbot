@@ -93,7 +93,8 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault("Content-Security-Policy", (
             "default-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data:; "
             "frame-ancestors 'none'"
         ))
@@ -142,7 +143,7 @@ def create_app() -> FastAPI:
             redoc_favicon_url="data:,", with_google_fonts=False,
         ))
 
-    # Static files serving
+    # Serve the Atlas frontend from the static directory
     static_dir = Path(__file__).resolve().parent / "static"
     os.makedirs(static_dir, exist_ok=True)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -150,8 +151,6 @@ def create_app() -> FastAPI:
     @app.get("/", response_class=FileResponse, tags=["UI"])
     async def serve_index():
         index_file = static_dir / "index.html"
-        if not index_file.exists():
-            index_file.write_text("<!DOCTYPE html><html><body>Placeholder</body></html>")
         return FileResponse(index_file)
 
     # Simple healthcheck endpoint (liveness — always 200 if process is running)

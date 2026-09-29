@@ -37,7 +37,7 @@ Investigation revealed two separate masking behaviors:
 ### Solution
 - Created a dedicated `GenerationError` exception hierarchy in [`app/services/errors.py`](../app/services/errors.py).
 - Modified the chat endpoint [`app/api/endpoints/chat.py`](../app/api/endpoints/chat.py) to catch `GenerationError` and propagate it as an HTTP error status (502, 503, or 504) rather than returning HTTP 200 with an error string.
-- Updated the frontend [`app/static/index.js`](../app/static/index.js) to inspect the API's `detail` field and render specific field validation errors directly to the user.
+- Updated the frontend [`app/static/app.js`](../app/static/app.js) to inspect the API's `detail` field and render specific field validation errors directly to the user.
 
 ### Why This Method Instead of Alternatives?
 - **Alternative 1: Let the frontend infer errors from response text.**
@@ -140,7 +140,7 @@ The backend serialization schema returned citation fields named `document_name` 
 
 ### Solution
 - Standardized [`app/schemas/chat.py`](../app/schemas/chat.py) with explicit field names: `document_name`, `page`, `section`, `snippet`, and `score`.
-- Updated [`app/static/index.js`](../app/static/index.js) to reference `citation.document_name` and `citation.snippet`.
+- Updated [`app/static/app.js`](../app/static/app.js) to reference `citation.document_name` and `citation.snippet`.
 - Updated asset cache busting in [`app/static/index.html`](../app/static/index.html).
 
 ### Why This Method Instead of Alternatives?

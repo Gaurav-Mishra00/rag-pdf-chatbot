@@ -1,0 +1,5 @@
+# Reference design observations
+
+The provided Dribbble page did not expose its image directly in the browser, but image search surfaced the matching shot titled “RAG | AI Knowledge Interface Dashboard by Mike Taylor on Dribbble” as thumbnails 3 and 5. The visible reference uses a bright, airy knowledge workspace with a light gray canvas, a narrow left navigation rail, a central dashboard split between a knowledge/library area and an assistant conversation area, soft rounded white cards, and a distinctive warm pink/red ambient glow around the main application frame.
+
+The most relevant patterns to adapt to Atlas are the clear three-zone information architecture (navigation, knowledge content, assistant), compact KPI/stat cards near the top, a “knowledge base” collection area, prominent assistant chat panel, pill-shaped metadata/status tags, restrained black/gray typography, and a soft editorial background glow. We should adapt these patterns rather than reproduce the shot literally, retaining Atlas’s PDF upload, document list, retrieval status, sessions, and source citations.

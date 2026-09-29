@@ -35,9 +35,9 @@ rag-pdf-chatbot/
 │   │   ├── rag_service.py       # Full RAG pipeline orchestrator (rewrite -> retrieve -> rerank -> gate -> generate)
 │   │   └── reranker.py          # Lazy process-wide CrossEncoder reranker with sigmoid confidence
 │   ├── static/                  # Frontend single-page application assets
-│   │   ├── index.html           # Modern responsive HTML5 UI
-│   │   ├── index.css            # Custom CSS styling (dark mode, glassmorphism, responsive cards)
-│   │   └── index.js             # Vanilla JS client logic for chatting, uploading, and citations
+│   │   ├── index.html           # Modern responsive HTML5 UI (Atlas)
+│   │   ├── styles.css           # Custom CSS styling (dark/light themes, ambient lighting, responsive cards)
+│   │   └── app.js               # Vanilla JS client logic for chatting, uploading, and citations
 │   ├── vectorstore/             # Vector database integration
 │   │   ├── faiss_store.py       # High-level FAISSVectorStore with thread locks & tenant filtering
 │   │   └── native_faiss.py      # Native FAISS adapter using JSON manifests (no Python pickle)
@@ -254,13 +254,13 @@ rag-pdf-chatbot/
 
 ### App Frontend (`app/static/`)
 
-#### [index.html](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/index.html), [index.css](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/index.css), [index.js](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/index.js)
-- **Role**: Built-in responsive Web UI.
+#### [index.html](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/index.html), [styles.css](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/styles.css), [app.js](file:///c:/PROJECTS/rag-pdf-chatbot/app/static/app.js)
+- **Role**: Built-in responsive Web UI (Atlas PDF Intelligence Workspace).
 - **What it does**:
-  - Provides a single-page chat interface served directly by FastAPI.
-  - Allows uploading PDF files via drag-and-drop or file picker with upload progress indicators.
-  - Displays conversational bubbles with markdown parsing, inline citation badges, and an interactive drawer to inspect source snippets and confidence scores.
-  - Includes session history sidebar with new chat creation, session switching, and deletion.
+  - Provides a single-page chat workspace served directly by FastAPI.
+  - Allows uploading PDF files via drag-and-drop or file picker with live status feedback.
+  - Displays conversation messages, citation badges, source library card, and retrieval status.
+  - Includes session history sidebar with new chat creation, session switching, and theme toggling.
 
 ---
 

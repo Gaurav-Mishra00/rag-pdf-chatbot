@@ -250,9 +250,9 @@ Implement the asynchronous history manager:
 ### Step 10: Frontend Web Interface (`app/static/`)
 
 Build a clean, responsive single-page web UI:
-- **`index.html`**: Clean semantic HTML structure with sidebar for conversation sessions, central chat container, message input with auto-expanding textarea, and citation side drawer.
-- **`index.css`**: CSS variables for dark mode, glassmorphism card styling, responsive flexbox layout, and subtle micro-animations.
-- **`index.js`**: Vanilla ES6 JavaScript handling asynchronous API requests, document drag-and-drop upload, markdown rendering, citation badge clicks, and session state persistence.
+- **`index.html`**: Clean semantic HTML structure with navigation sidebar, central chat workspace, and source library panel.
+- **`styles.css`**: CSS variables for dark/light themes, ambient lighting, responsive flexbox/grid layout, and subtle micro-animations.
+- **`app.js`**: Vanilla ES6 JavaScript handling asynchronous API requests, document drag-and-drop upload, message rendering, citation badges, and session state persistence.
 
 ---
 
