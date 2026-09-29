@@ -21,6 +21,8 @@ This document details the engineering challenges, bugs, and architectural limita
 13. [Hallucinations on Out-of-Scope Questions](#13-hallucinations-on-out-of-scope-questions)
 14. [Swagger/ReDoc Content Security Policy (CSP) Blockages](#14-swaggerredoc-content-security-policy-csp-blockages)
 15. [Storage Drift Across SQLite, Disk Files, and FAISS](#15-storage-drift-across-sqlite-disk-files-and-faiss)
+16. [Latency & Resource Bottlenecks on Repeated Queries, Monolithic Generation, and Index Loading](#16-latency--resource-bottlenecks-on-repeated-queries-monolithic-generation-and-index-loading)
+17. [AttributeError on Structured LLM Responses (Google Gemini & Anthropic)](#17-attributeerror-on-structured-llm-responses-google-gemini--anthropic)
 
 ---
 
@@ -377,4 +379,48 @@ As the repository grew, four primary efficiency bottlenecks became prominent:
   *Why rejected*: An in-process, lock-guarded LRU cache provides microsecond hit latencies without adding external operational dependencies or configuration overhead for local deployments.
 - **Alternative: WebSocket streaming instead of SSE.**
   *Why rejected*: Server-Sent Events work seamlessly over standard HTTP/1.1 and HTTP/2, are natively compatible with reverse proxies and corporate firewalls without stateful socket negotiations, and simplify client-side reconnection logic.
+
+---
+
+## 17. AttributeError on Structured LLM Responses (Google Gemini & Anthropic)
+
+### Problem
+When asking standard questions (such as *"what is machine learning"*), the chat query endpoint failed with an HTTP 502 Bad Gateway error and the following backend traceback:
+```text
+File "app/services/rag_service.py", line 250, in _generate
+    answer = response.content.strip()
+             ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'strip'
+INFO: 127.0.0.1:56618 - "POST /api/v1/chat/query HTTP/1.1" 502 Bad Gateway
+```
+
+### Root Cause
+In LangChain, modern chat model wrappers (`ChatGoogleGenerativeAI`, `ChatAnthropic`, and multi-modal models) return `BaseMessage.content` typed as `Union[str, List[Union[str, Dict[str, Any]]]]`. 
+
+Specifically, Google's Gemini models frequently return structured content block arrays rather than flat strings:
+```python
+[
+    {"type": "text", "text": "Machine learning is a subset of artificial intelligence..."}
+]
+```
+The codebase previously made an unchecked assumption in `_contextualize_query`, `_generate`, and `answer_query_stream` that `response.content` was always a Python `str`. Calling `.strip()` directly on a list raised `AttributeError: 'list' object has no attribute 'strip'`.
+
+### Solution
+Implemented a centralized text normalization helper [`_extract_text_content(content: Any) -> str`](../app/services/rag_service.py):
+1. **String Passthrough**: Returns string inputs directly.
+2. **List Recursion & Assembly**: Iterates through list items:
+   - Plain strings are appended directly.
+   - Dictionaries are probed for standard content keys (`item.get("text")` or `item.get("content")`).
+   - Objects with `.text` or `.content` attributes are extracted recursively.
+   - Joins extracted chunks into a unified string.
+3. **Pervasive Application**:
+   - `_contextualize_query`: Rewrites follow-up questions safely without assuming string return types.
+   - `_generate`: Normalizes the generated response before citation verification and relevance checking.
+   - `answer_query_stream`: Safely extracts tokens from stream chunk payloads during SSE generation.
+
+### Why This Method Instead of Alternatives?
+- **Alternative 1: String casting `str(response.content)`.**
+  *Why rejected*: Calling `str([{"type": "text", ...}])` produces a literal Python representation string `'[{\'type\': \'text\', ...}]'`, exposing JSON/Python syntax directly to end users.
+- **Alternative 2: Provider-specific `if settings.LLM_PROVIDER == "google":` branches.**
+  *Why rejected*: Fragile and violates provider abstraction. Modern Anthropic, OpenAI multi-modal, and future providers also emit structured content blocks. A universal polymorphic normalizer handles all providers transparently.
 

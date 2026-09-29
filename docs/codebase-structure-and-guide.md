@@ -55,7 +55,7 @@ rag-pdf-chatbot/
 │   └── technical-build-guide.md # Step-by-step technical implementation guide
 ├── scripts/                     # Standalone operational tools
 │   └── reindex.py               # CLI tool to rebuild FAISS index from disk PDFs & SQLite metadata
-├── tests/                       # Automated test suite (102 pytest tests)
+├── tests/                       # Automated test suite (105 pytest tests)
 │   ├── conftest.py              # Global fixtures, mock providers, and isolated test databases
 │   ├── test_api.py              # Basic endpoint smoke and routing tests
 │   ├── test_arch_problems.py    # Architectural regression tests (WAL mode, locks, deletion)
@@ -189,12 +189,14 @@ rag-pdf-chatbot/
 #### [rag_service.py](file:///c:/PROJECTS/rag-pdf-chatbot/app/services/rag_service.py)
 - **Role**: The core RAG pipeline orchestrator.
 - **What it does**:
-  1. **Query Reformulation**: If conversation history exists, uses a light LLM call to rewrite ambiguous follow-up questions (e.g., "What are its types?") into standalone search queries.
-  2. **Dense Retrieval**: Queries FAISS for top-K candidate chunks using cosine similarity.
-  3. **Cross-Encoder Reranking**: If enabled, passes query-document pairs to the cross-encoder to compute refined relevance scores.
-  4. **Relevance Gating ("I don't know")**: Compares top candidate scores against `RELEVANCE_THRESHOLD`. If no chunks meet the threshold, the system immediately returns a helpful "I do not have sufficient information in the uploaded documents" message, skipping the LLM generation call to eliminate hallucinations.
-  5. **Grounded Generation**: Combines filtered chunks into structured context, formats the prompt enforcing inline `[Source X]` citations, and invokes the LLM.
-  6. **Citation Resolution**: Parses returned text for citations and links them to exact document names, page numbers, and text snippets.
+  1. **Query Caching**: Checks the in-memory LRU TTL query cache before retrieval; returns immediate cached results on repeated queries.
+  2. **Query Reformulation**: If conversation history exists, uses a light LLM call to rewrite ambiguous follow-up questions (e.g., "What are its types?") into standalone search queries.
+  3. **Dense Retrieval**: Queries FAISS for top-K candidate chunks using cosine similarity, filtered by user ID.
+  4. **Adaptive Cross-Encoder Reranking**: If enabled, passes query-document pairs to the cross-encoder, skipping or throttling rerank steps when top dense similarity exceeds the adaptive threshold.
+  5. **Relevance Gating ("I don't know")**: Compares top candidate scores against `RELEVANCE_THRESHOLD`. If no chunks meet the threshold, the system immediately returns a helpful "I do not have sufficient information in the uploaded documents" message, skipping the LLM generation call to eliminate hallucinations.
+  6. **Grounded Generation & Polymorphic Content Normalization**: Formats system prompts with numbered inline sources `[Source X]`. Uses `_extract_text_content` to safely normalize string, list-of-string, or structured dict block responses from providers like Google Gemini and Anthropic.
+  7. **Real-Time Streaming**: Implements `answer_query_stream()` to yield Server-Sent Events (SSE) token chunks for fast time-to-first-token.
+  8. **Citation Resolution**: Parses returned text for citations and links them to exact document names, page numbers, and text snippets.
 
 #### [reranker.py](file:///c:/PROJECTS/rag-pdf-chatbot/app/services/reranker.py)
 - **Role**: Neural cross-encoder reranking.

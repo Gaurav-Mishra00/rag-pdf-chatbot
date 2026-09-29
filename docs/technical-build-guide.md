@@ -197,22 +197,27 @@ Rather than relying on deprecated and vulnerable pickle-based LangChain FAISS wr
 
 Implement the complete conversational RAG execution flow:
 
-1. **Conversational Question Condensation**:
-   If history exists, format past turns and user prompt into `CONDENSE_QUESTION_PROMPT`. Have the LLM return a standalone search query.
-2. **Dense Retrieval**:
-   Retrieve top $K$ candidate chunks (e.g. $K=8$) from FAISS.
-3. **Cross-Encoder Reranking (`app/services/reranker.py`)**:
-   Pass $(q, \text{chunk})$ pairs to `ms-marco-MiniLM-L-6-v2`. Transform logits via sigmoid function:
+1. **In-Memory Query Result Caching (`app/core/cache.py`)**:
+   Check the thread-safe LRU TTL cache (`query_cache`) for a key matching `f"{user_id}:{normalized_query}"`. If present and valid, return immediately without touching FAISS or the LLM. Invalidate cache on document upload or deletion.
+2. **Conversational Question Condensation**:
+   If history exists, format past turns and user prompt into `CONDENSE_QUESTION_PROMPT`. Have the LLM return a standalone search query. Safely normalize LLM content output via `_extract_text_content`.
+3. **Dense Retrieval**:
+   Retrieve top $K$ candidate chunks (e.g. $K=8$) from FAISS, filtered strictly by authenticated `user_id`.
+4. **Adaptive Cross-Encoder Reranking (`app/services/reranker.py`)**:
+   If enabled and the top dense retrieval similarity is below `ADAPTIVE_RERANK_THRESHOLD` (0.88), pass $(q, \text{chunk})$ pairs to `ms-marco-MiniLM-L-6-v2`. Transform logits via sigmoid function:
    $$\text{score} = \frac{1}{1 + e^{-\text{logit}}}$$
    Sort documents by rerank score descending.
-4. **Relevance Gating ("I don't know" circuit breaker)**:
+5. **Relevance Gating ("I don't know" circuit breaker)**:
    If top score $< \text{RELEVANCE\_THRESHOLD}$ (0.35), bypass LLM generation completely and return:
    > *"I do not have sufficient information in the uploaded documents to answer this question."*
-5. **Grounded Generation**:
+6. **Grounded Generation & Text Normalization**:
    Construct system prompt:
    - Provide structured contexts labeled `[Source 1]`, `[Source 2]`, etc.
    - Instruct model to only answer using provided context and cite inline.
-6. **Citation Resolution**:
+   - Invoke LLM and normalize the output using `_extract_text_content` to safely handle strings, lists of strings, or structured content block dicts (`[{'type': 'text', 'text': '...'}]`) returned by Gemini/Anthropic models.
+7. **Token Streaming (Server-Sent Events)**:
+   Via `answer_query_stream()`, emit W3C SSE frames (`event: citations`, `event: token`, `event: done`, `event: error`), yielding incremental tokens extracted via `_extract_text_content` for sub-250ms time-to-first-token.
+8. **Citation Resolution**:
    Parse citations in model response text, map to source document name, page, and chunk snippet, and format response metadata.
 
 ---
@@ -291,13 +296,17 @@ Run the automated test suite to verify all architectural requirements:
 pytest
 ```
 
-All **95 tests** validate:
+All **105 tests** validate:
 - Persistent chat history across server reloads.
 - Concurrency write locking in FAISS.
 - PDF upload validation (magic bytes, size limits).
 - Document deletion and vector chunk removal.
 - Provider error mapping (502, 503, 504) and non-persistence of failed turns.
 - Multi-tenant privacy boundaries and rate limiting.
-- Cross-encoder reranking and relevance thresholding.
+- Cross-encoder reranking, adaptive thresholds, and relevance gating.
 - Self-healing storage reconciliation.
 - Swagger and ReDoc documentation CSP nonces.
+- Thread-safe LRU query caching with automatic invalidation.
+- SHA-256 chunk hash deduplication and HNSW index loading.
+- Server-Sent Events (SSE) token streaming.
+- Polymorphic LLM content block normalization (`_extract_text_content`).
